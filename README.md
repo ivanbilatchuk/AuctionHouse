@@ -1,6 +1,6 @@
 # AuctionHouse — аукціонний дім колекційних предметів
 
-**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури.
+**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper).
 Три незалежні бази даних для подальшої розробки трьох мікросервісів (ASP.NET Core).
 
 | Проєкт | Контекст | СУБД і технологія доступу | Каталог у репозиторії |
@@ -21,10 +21,13 @@ AuctionHouse/
 │   ├── p1/          (Auctions)  schema.sql · procedures.sql · seed.sql · verify.sql
 │   ├── p2/          (Catalog)   schema.sql · seed.sql
 │   └── p3/          (Community) collections.js · seed.js · queries.js
-└── scripts/
-    ├── docker-compose.db.yml    SQL Server + MongoDB для розробки
-    ├── deploy.ps1               розгортання всіх трьох баз (Windows)
-    └── deploy.sh                те саме для Linux/macOS
+├── scripts/
+│   ├── docker-compose.db.yml    SQL Server + MongoDB для розробки
+│   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
+│   └── deploy.sh                те саме для Linux/macOS
+├── Platform.slnx                решення (Лаба 2)
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + Auctions.Api (Лаба 2)
+└── Services/Auctions/           Проєкт №1 як вертикаль Api → Bll → Dal → Domain (Лаба 2)
 ```
 
 ## Зміст
@@ -38,7 +41,8 @@ AuctionHouse/
 7. [Початкові дані (ідемпотентні seed-скрипти)](#7-початкові-дані-ідемпотентні-seed-скрипти)
 8. [Розгортання: порядок запуску](#8-розгортання-порядок-запуску)
 9. [Перевірка індексів, обмежень і процедур](#9-перевірка-індексів-обмежень-і-процедур)
-10. [Відповідність критеріям прийому](#10-відповідність-критеріям-прийому)
+10. [Відповідність критеріям прийому (Лаба 1)](#10-відповідність-критеріям-прийому)
+11. [Лабораторна 2 — тришарова архітектура на ADO.NET та Dapper](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper)
 
 ---
 
@@ -638,3 +642,159 @@ SELECT (SELECT COUNT(*) FROM AuctionHouse_Auctions.dbo.Bid) AS Bids,
 | MongoDB: 3–4 колекції з embedding, referencing і гібридним підходом | [§6](#6-проєкт-3--mongodb), `db/p3/collections.js` |
 | Ідемпотентні seed-скрипти для всіх баз | [§7](#7-початкові-дані-ідемпотентні-seed-скрипти) |
 | Скрипти розгортання та README з порядком запуску й ERD | `scripts/`, [§8](#8-розгортання-порядок-запуску), ERD у §4.1, §5.1, §6.1 |
+
+---
+
+## 11. Лабораторна 2 — тришарова архітектура на ADO.NET та Dapper
+
+Лаба продовжує Лабу 1: **Проєкт №1 (Auctions)** реалізовано як самостійну вертикаль **API → BLL → DAL** над базою `AuctionHouse_Auctions` (`db/p1`).
+
+### 11.1 Структура рішення
+
+```
+Platform.slnx
+Platform.AppHost/                 AppHost.cs: SQL Server (контейнер) + база auctionsdb + Auctions.Api
+Services/Auctions/
+├── Auctions.Api/                 Controllers/, ExceptionHandling/ (ProblemDetails), Program.cs, appsettings.json
+├── Auctions.Bll/                 Services/, DTO/, Mapping/ (AutoMapper), Validation/, Caching/ (зарезервовано)
+├── Auctions.Dal/                 Interfaces/, Repositories/ (ADO.NET + Dapper), UnitOfWork/
+└── Auctions.Domain/              Models/, Exceptions/
+```
+
+Залежності: `Api → Bll → Dal → Domain` (Domain не залежить ні від чого). SQL існує **лише** в `Auctions.Dal`.
+
+| Шар | Що містить |
+|---|---|
+| **Domain** | моделі `Auction`, `AuctionDetails`, `Bid`, `Bidder`, `AuctionRegistration`; винятки `NotFoundException`, `BusinessConflictException`, `ValidationException`, `DataAccessException` |
+| **DAL** | `IGenericRepository<T>`; `BidRepository` — **чистий ADO.NET**; `BaseDapperRepository<T>` + `AuctionRepository` і `BidderRepository` — **Dapper**; `UnitOfWork` |
+| **BLL** | DTO, AutoMapper-профілі, сервіси `AuctionService`/`BidderService`/`BidService`, валідатор бізнес-правил |
+| **API** | тонкі контролери, глобальний обробник помилок (ProblemDetails), Swagger/OpenAPI |
+
+### 11.2 DAL: репозиторії та Unit of Work
+
+- **`IGenericRepository<T>`** — `GetByIdAsync`, `GetAllAsync`, `AddAsync`, `UpdateAsync`, `DeleteAsync` (м'яке видалення), усі з `CancellationToken`.
+- **`BidRepository` (ADO.NET)** — `SqlCommand` + `SqlParameter` (тип, розмір, precision/scale), ручне читання `SqlDataReader`, `await using` для команд і reader-ів, команда виконується в транзакції UoW (`SqlCommand.Transaction`).
+- **`BaseDapperRepository<T>`** реалізує `IGenericRepository<T>` і дає похідним класам асинхронні `QueryAsync`/`ExecuteAsync` (`CommandDefinition` з транзакцією, таймаутом і `CancellationToken`).
+  - `AuctionRepository` — **multi-mapping** (`Auction` + `AuctionDetails`, `splitOn: "AuctionId"`), оновлення з перевіркою `RowVersion`, виклик **збереженої процедури** `dbo.sp_ChangeAuctionStatus` (`CommandType.StoredProcedure`).
+  - `BidderRepository` — CRUD, пошук за email, реєстрація на аукціон (M:N), списання з гаманця та журнал `WalletTransaction`.
+- **Параметризація:** жодного рядка SQL із конкатенацією чи інтерполяцією вхідних даних; усі значення передаються параметрами.
+- **З'єднання:** `UnitOfWork` створює `SqlConnection` (з пулу ADO.NET) і закриває його в `DisposeAsync`; репозиторії з'єднань не відкривають.
+- **Помилки:** `SqlExceptionTranslator` перетворює `SqlException` на доменні винятки (`THROW 50000/50042` → NotFound, `50011` → Validation, унікальність/FK/deadlock/інші `5xxxx` → BusinessConflict, решта → `DataAccessException` без «сирого» SQL-тексту).
+
+**Unit of Work** (`IUnitOfWork`, час життя Scoped = один HTTP-запит): одне з'єднання, одна транзакція для всіх репозиторіїв, `BeginTransactionAsync(IsolationLevel)`, `CommitAsync`, `RollbackAsync`; якщо `Commit` не викликано, `DisposeAsync` відкочує транзакцію.
+
+**Рівень ізоляції та таймаути (trade-offs).** За замовчуванням `READ COMMITTED` — не читає «брудні» дані й не створює зайвих блокувань. Там, де потрібна узгодженість «прочитати → перевірити → змінити» (ставка, реєстрація, редагування), рядок аукціону читається з підказкою `UPDLOCK, HOLDLOCK` — конкурентні запити виконуються послідовно. `SERIALIZABLE` для всієї транзакції давав би ширші діапазонні блокування та більше deadlock-ів, тому не використовується. Порядок блокувань завжди `Auction → Bidder` (як у `db/p1/procedures.sql`), що виключає взаємні блокування між цими операціями. Таймаут команд — 30 с (`IDbSession.CommandTimeoutSeconds`), deadlock-жертва повертається клієнту як 409 з пропозицією повторити запит.
+
+### 11.3 BLL
+
+- **DTO** (`Create/Update/Response`) — лише дані, без логіки. **AutoMapper-профілі** (`AuctionProfile`, `BidderProfile`, `BidProfile`) зареєстровані в `Program.cs` (`AddAutoMapper`).
+- **Сервіси** використовують UoW і кидають доменні винятки:
+  - `AuctionService` — створення (у транзакції: перевірка «лот без незавершеного аукціону» + запис `Auction`, `AuctionDetails`, початковий рядок історії; `ItemTitle` зберігається як **знімок** назви з Catalog), редагування (оптимістична конкурентність за `RowVersion`), зміна статусу, м'яке видалення.
+  - `BidService.PlaceBidAsync` — **транзакція над трьома репозиторіями** (`Auctions` + `Bidders` + `Bids`): перевірка статусу/часу/реєстрації/мінімальної ставки, anti-sniping, скидання попереднього лідера, запис ставки, оновлення аукціону. Помилка на будь-якому кроці відкочує все.
+  - `BidderService.RegisterForAuctionAsync` — транзакція над `Auctions` + `Bidders`: блокування депозиту, списання з гаманця, журнал, реєстрація.
+- **Двохрівнева валідація.** Рівень 1 — атрибути `DataAnnotations` на DTO (`[Required]`, `[Range]`, `[StringLength]`), їх перевіряє `[ApiController]` → 400. Рівень 2 — бізнес-правила в `AuctionValidator` та сервісах (`EndsAt > StartsAt`, `ReservePrice ≥ StartingPrice`, відомий статус, баланс, статус аукціону) → `ValidationException`/`BusinessConflictException`.
+
+### 11.4 API
+
+Атрибутна маршрутизація, асинхронні тонкі контролери (`ActionResult<T>`, `CancellationToken` передається в BLL → DAL).
+
+| Метод і маршрут | Успіх | Помилки |
+|---|---|---|
+| `GET /api/auctions?status=Active` | 200 | 400 |
+| `GET /api/auctions/{id}` | 200 | 404 |
+| `POST /api/auctions` | **201** + `Location` | 400, 409 |
+| `PUT /api/auctions/{id}` | 200 | 400, 404, 409 |
+| `POST /api/auctions/{id}/status` | 200 | 400, 404, 409 |
+| `DELETE /api/auctions/{id}` | **204** | 404, 409 |
+| `GET /api/bidders`, `GET /api/bidders/{id}` | 200 | 404 |
+| `POST /api/bidders` | **201** + `Location` | 400, 409 |
+| `POST /api/bidders/{id}/registrations` | 200 | 400, 404, 409 |
+| `GET /api/auctions/{auctionId}/bids`, `GET …/bids/{bidId}` | 200 | 404 |
+| `POST /api/auctions/{auctionId}/bids` | **201** + `Location` | 400, 404, 409 |
+
+**Помилки — ProblemDetails (RFC 9457)** через `IExceptionHandler` (`GlobalExceptionHandler`): `NotFoundException` → **404**, `BusinessConflictException` → **409**, `ValidationException` та помилки моделі → **400**, будь-що інше → **500** (клієнту — лише `traceId`). **OpenAPI/Swagger:** `/swagger` (XML-коментарі контролерів + `ProducesResponseType`).
+
+### 11.5 Запуск через .NET Aspire
+
+Потрібно: **.NET 10 SDK** і **Docker Desktop** (Aspire сам піднімає контейнер SQL Server; контейнери з Лаби 1 для цього запускати не потрібно).
+
+```bash
+dotnet run --project Platform.AppHost
+```
+
+1. У консолі з'явиться посилання на **Aspire Dashboard** — відкрийте його. Ресурси `sql`, `auctionsdb` та `auctions-api` мають перейти у стан *Running*; health check `auctions-api` (`/health`) — *Healthy*.
+2. AppHost створює базу `AuctionHouse_Auctions` і виконує `db/p1/schema.sql → procedures.sql → seed.sql` (скрипти ідемпотентні).
+3. URL `auctions-api` беріть із Dashboard; Swagger — `<url>/swagger`. Пароль SQL Server Aspire генерує сам, рядок підключення підставляється в API автоматично (`ConnectionStrings__auctionsdb`).
+
+Запуск з Visual Studio / Rider: стартовий проєкт — `Platform.AppHost`.
+
+**Без Aspire:** підніміть бази за §8 (`docker compose … up -d`, `deploy`), потім `dotnet run --project Services/Auctions/Auctions.Api --launch-profile http` (Swagger: http://localhost:5180/swagger). Рядок підключення береться з `appsettings.json` (`ConnectionStrings:AuctionsDb`) і перевизначається змінною середовища `ConnectionStrings__AuctionsDb`.
+
+### 11.6 Приклади запитів (curl)
+
+Підставте свій `BASE` (з Dashboard або `http://localhost:5180`). Seed: аукціони 1 (Active, лідер — учасник 1, ціна 6250, крок 250), 2 (Scheduled, депозит 50), 3 (Draft); учасники 1–3.
+
+```bash
+BASE=http://localhost:5180
+
+# список і деталі
+curl -s "$BASE/api/auctions?status=Active"
+curl -s "$BASE/api/auctions/1"
+
+# 201 Created + Location: новий учасник
+curl -i -X POST "$BASE/api/bidders" -H "Content-Type: application/json" \
+  -d '{"externalUserId":"55555555-0000-0000-0000-000000000001","displayName":"Test Bidder","email":"test.bidder@example.com","initialBalance":1000}'
+
+# 201 Created: ставка 6500 від учасника 2 на аукціон 1 (мінімум 6250 + 250)
+curl -i -X POST "$BASE/api/auctions/1/bids" -H "Content-Type: application/json" \
+  -d '{"bidderId":2,"amount":6500}'
+
+# 409 Conflict: ця ж людина вже лідер
+curl -i -X POST "$BASE/api/auctions/1/bids" -H "Content-Type: application/json" \
+  -d '{"bidderId":2,"amount":7000}'
+
+# 409 Conflict: ставка нижча за мінімальну
+curl -i -X POST "$BASE/api/auctions/1/bids" -H "Content-Type: application/json" \
+  -d '{"bidderId":3,"amount":6600}'
+
+# 200 OK: реєстрація учасника 2 на аукціон 2 (депозит 50 списується з гаманця у транзакції)
+curl -i -X POST "$BASE/api/bidders/2/registrations" -H "Content-Type: application/json" \
+  -d '{"auctionId":2}'
+
+# 201 Created: новий аукціон (Draft); час — у майбутньому
+curl -i -X POST "$BASE/api/auctions" -H "Content-Type: application/json" \
+  -d '{"itemId":4,"itemTitle":"Silver Denarius, Roman Republic","sellerExternalId":"11111111-1111-1111-1111-111111111111","startsAt":"2030-01-01T10:00:00Z","endsAt":"2030-01-08T10:00:00Z","startingPrice":300,"reservePrice":500,"bidIncrement":10,"requiredDeposit":30}'
+
+# 409 Conflict: недопустимий перехід Draft -> Active (збережена процедура)
+curl -i -X POST "$BASE/api/auctions/3/status" -H "Content-Type: application/json" -d '{"status":"Active"}'
+
+# 404 Not Found (ProblemDetails)
+curl -i "$BASE/api/auctions/999"
+
+# 400 Bad Request (ProblemDetails з переліком помилок): порожня назва, від'ємна ціна
+curl -i -X POST "$BASE/api/auctions" -H "Content-Type: application/json" \
+  -d '{"itemId":5,"itemTitle":"","sellerExternalId":"11111111-1111-1111-1111-111111111111","startsAt":"2030-01-01T10:00:00Z","endsAt":"2030-01-08T10:00:00Z","startingPrice":-1}'
+```
+
+Postman: імпортуйте `<BASE>/swagger/v1/swagger.json` як OpenAPI-колекцію.
+
+> Кожен прогін ставок змінює дані в БД. Щоб повернути початковий стан при запуску через Aspire — перезапустіть AppHost (контейнер без постійного тому створюється наново).
+
+### 11.7 Відповідність критеріям прийому (Лаба 2)
+
+| Критерій | Де виконано |
+|---|---|
+| Шари Api/Bll/Dal(/Domain) та DI, connection string у конфігурації | `Platform.slnx`, `*.csproj`, `Auctions.Api/Program.cs`, `appsettings.json` |
+| `IGenericRepository<T>` | `Auctions.Dal/Interfaces/IGenericRepository.cs` |
+| Репозиторій на чистому ADO.NET | `Auctions.Dal/Repositories/BidRepository.cs` |
+| ≥ 2 Dapper-репозиторії з `BaseDapperRepository<T>` | `BaseDapperRepository.cs`, `AuctionRepository.cs`, `BidderRepository.cs` |
+| Параметризовані запити, з'єднання закриваються | усі репозиторії; `UnitOfWork.DisposeAsync` |
+| Unit of Work з транзакціями | `Auctions.Dal/UnitOfWork/UnitOfWork.cs`, реєстрація в `Program.cs` |
+| DTO + AutoMapper | `Auctions.Bll/DTO/`, `Auctions.Bll/Mapping/`, `AddAutoMapper` у `Program.cs` |
+| Сервіс з транзакційною операцією над кількома репозиторіями | `BidService.PlaceBidAsync`, `BidderService.RegisterForAuctionAsync`, `AuctionService.CreateAsync` |
+| Доменні винятки | `Auctions.Domain/Exceptions/`, використання в `Auctions.Bll/Services/` |
+| Двохрівнева валідація | DataAnnotations у `DTO/`, `Validation/AuctionValidator.cs` |
+| Thin async-контролери, атрибутна маршрутизація, Swagger | `Auctions.Api/Controllers/`, `Program.cs` |
+| ProblemDetails | `Auctions.Api/ExceptionHandling/GlobalExceptionHandler.cs` |
+| AppHost запускає API з базою | `Platform.AppHost/AppHost.cs` |
+| README: запуск через Aspire і приклади запитів | §11.5, §11.6 |
