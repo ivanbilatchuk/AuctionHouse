@@ -1,0 +1,12 @@
+# IDE
+.idea/
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# local env / data
+.env
+*.log
