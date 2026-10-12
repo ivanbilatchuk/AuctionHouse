@@ -1,0 +1,43 @@
+# Локальні СУБД для розробки: SQL Server 2022 (Auctions, Catalog) та MongoDB 7 (Community).
+# Запуск:  docker compose -f scripts/docker-compose.db.yml up -d
+# Папка db/ монтується в контейнери лише для читання (/scripts), щоб deploy-скрипти
+# запускали sqlcmd / mongosh усередині контейнерів без локального встановлення клієнтів.
+name: auctionhouse
+
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: auctionhouse-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-AuctionHouse_Dev#2026}"   # лише для локальної розробки
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+      - ../db:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  mongo:
+    image: mongo:7
+    container_name: auctionhouse-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+      - ../db:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  sqldata:
+  mongodata:
