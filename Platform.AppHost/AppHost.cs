@@ -4,6 +4,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var sql = builder.AddSqlServer("sql");
 var auctionsDb = sql.AddDatabase("auctionsdb", "AuctionHouse_Auctions");
+var catalogDb = sql.AddDatabase("catalogdb", "AuctionHouse_Catalog");
 
 var scriptsDirectory = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "db", "p1"));
 builder.Eventing.Subscribe<ResourceReadyEvent>(auctionsDb.Resource, async (@event, cancellationToken) =>
@@ -17,6 +18,12 @@ builder.Eventing.Subscribe<ResourceReadyEvent>(auctionsDb.Resource, async (@even
 builder.AddProject<Projects.Auctions_Api>("auctions-api")
     .WithReference(auctionsDb)
     .WaitFor(auctionsDb)
+    .WithHttpHealthCheck("/health");
+
+// Catalog: схему створюють EF Core-міграції (MigrateAsync під час старту API), скрипти не потрібні.
+builder.AddProject<Projects.Catalog_Api>("catalog-api")
+    .WithReference(catalogDb)
+    .WaitFor(catalogDb)
     .WithHttpHealthCheck("/health");
 
 builder.Build().Run();

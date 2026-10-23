@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Services\Auctions\Auctions.Api\Auctions.Api.csproj" />
+    <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
   </ItemGroup>
 
 </Project>

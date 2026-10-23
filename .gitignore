@@ -17,3 +17,6 @@ obj/
 *.user
 *.suo
 launchSettings.local.json
+
+# logs
+logs/

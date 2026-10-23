@@ -1,6 +1,6 @@
 # AuctionHouse — аукціонний дім колекційних предметів
 
-**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper).
+**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core).
 Три незалежні бази даних для подальшої розробки трьох мікросервісів (ASP.NET Core).
 
 | Проєкт | Контекст | СУБД і технологія доступу | Каталог у репозиторії |
@@ -25,9 +25,16 @@ AuctionHouse/
 │   ├── docker-compose.db.yml    SQL Server + MongoDB для розробки
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
-├── Platform.slnx                решення (Лаба 2)
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + Auctions.Api (Лаба 2)
-└── Services/Auctions/           Проєкт №1 як вертикаль Api → Bll → Dal → Domain (Лаба 2)
+├── Platform.slnx                одне рішення на всю платформу
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + Auctions.Api + Catalog.Api
+└── Services/
+    ├── Auctions/                Проєкт №1 — ADO.NET + Dapper (Лаба 2)
+    └── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
+        ├── Catalog.Api/         контролери, Program.cs, appsettings*.json, Dockerfile
+        ├── Catalog.Bll/         сервіси, DTO, Mapping/, Validation/, Specifications/, Caching/
+        ├── Catalog.Dal/         CatalogDbContext, Configurations/, Migrations/, Repositories/, UnitOfWork/, Seeding/
+        ├── Catalog.Domain/      сутності, доменні винятки
+        └── Catalog.Tests/       модульні тести (xUnit)
 ```
 
 ## Зміст
@@ -43,6 +50,7 @@ AuctionHouse/
 9. [Перевірка індексів, обмежень і процедур](#9-перевірка-індексів-обмежень-і-процедур)
 10. [Відповідність критеріям прийому (Лаба 1)](#10-відповідність-критеріям-прийому)
 11. [Лабораторна 2 — тришарова архітектура на ADO.NET та Dapper](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper)
+12. [Лабораторна 3 — тришарова архітектура на Entity Framework Core](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core)
 
 ---
 
@@ -798,3 +806,197 @@ Postman: імпортуйте `<BASE>/swagger/v1/swagger.json` як OpenAPI-ко
 | ProblemDetails | `Auctions.Api/ExceptionHandling/GlobalExceptionHandler.cs` |
 | AppHost запускає API з базою | `Platform.AppHost/AppHost.cs` |
 | README: запуск через Aspire і приклади запитів | §11.5, §11.6 |
+
+---
+
+## 12. Лабораторна 3 — тришарова архітектура на Entity Framework Core
+
+**Проєкт №2 (Catalog)** реалізовано як мікросервіс на **EF Core (Code First + Fluent API)** зі структурою Лаби 2: `Catalog.Api → Catalog.Bll → Catalog.Dal → Catalog.Domain` (+ `Catalog.Tests`). Модель відтворює схему `db/p2` (ті самі таблиці, імена ключів, CHECK, фільтровані індекси), тепер її створюють **міграції**. Доступ до даних — лише через EF Core: DbContext, Fluent API, LINQ to Entities.
+
+### 12.1 Модель предметної області
+
+| Методичка | Catalog | Таблиця | Зв'язок |
+|---|---|---|---|
+| Product | `Item` (лот) | `dbo.Item` | корінь агрегату |
+| ProductDetail | `ItemDetail` | `dbo.ItemDetail` | **1:1** — PK `ItemId` водночас FK |
+| ProductImage | `ItemImage` | `dbo.ItemImage` | **1:N** |
+| Category | `Category` (ієрархія через `ParentCategoryId`) | `dbo.Category` | **1:N** Category → Item, 1:N на себе |
+| ProductCategory (AddedAt) | `ItemTag` | `dbo.ItemTag` | **M:N** Item ↔ Tag через явну сутність: складений ключ `(ItemId, TagId)` + власні поля `AddedAt`, `AddedBy` |
+| SKU | `Item.Sku` | `UQ_Item_Sku` | унікальний бізнес-ключ лота (повтор → 409) |
+
+`Item.Sku` — нове поле Лаби 3 (у `db/p2/schema.sql` Лаби 1 його не було): каталожний номер лота `[A-Z0-9-]`, унікальний індекс.
+
+**Інкапсуляція бізнес-правил (як `CatalogItem` в eShop).** Усі сетери приватні, для EF — приватний конструктор без параметрів; колекції — `IReadOnlyCollection` поверх приватних полів (`PropertyAccessMode.Field`). Правила перевіряє сама сутність і кидає `DomainException`:
+
+- конструктор `Item(...)`: естімейт `> 0`, `EstimateHigh ≥ EstimateLow`, обов'язкові SKU/назва/slug, валюта з 3 літер; новий лот завжди `Draft`;
+- стан змінюється лише методами: `Rename`, `ChangeEstimate`, `MoveToCategory` (лише в `Draft`/`Listed`), `SetDetail`, `AddImage` (рівно одне головне зображення), `AddTag`/`RemoveTag` (без дублів);
+- переходи статусів: `List()` Draft/Withdrawn → Listed, `SendToAuction()` Listed → InAuction, `MarkSold()` InAuction → Sold, `Withdraw()` → Withdrawn; недопустимий перехід → 409;
+- `EnsureCanBeDeleted()` — лот на аукціоні або проданий видалити не можна.
+
+### 12.2 Fluent API та міграції
+
+Кожна сутність має окремий клас `IEntityTypeConfiguration<T>` у `Catalog.Dal/Configurations/`. Усі вони підключаються централізовано:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+    => modelBuilder.ApplyConfigurationsFromAssembly(typeof(CatalogDbContext).Assembly);
+```
+
+У конфігураціях задано: назви таблиць і стовпців (`ItemId`, `CategoryId`…), ключі, довжини рядків, `decimal(18,2)`, `char(3)`, `datetime2(3)`, enum → `nvarchar(20)`, унікальні індекси (`UQ_Item_Sku`, `UQ_Item_Slug`, `UQ_Category_Slug`, `UQ_Tag_Name`…), фільтровані та покривні індекси, CHECK-обмеження (`CK_Item_Estimate`, `CK_Item_Status`, `CK_ItemImage_Url`…), `DeleteBehavior`, `rowversion` (`IsRowVersion`), глобальний фільтр `IsDeleted`. `CatalogDbContext` перетворює `Remove` на м'яке видалення й заповнює `UpdatedAt/UpdatedBy`.
+
+Пакети: `Microsoft.EntityFrameworkCore.SqlServer` (у `Catalog.Dal`), `Microsoft.EntityFrameworkCore.Design` (у стартовому `Catalog.Api`). Папка `Catalog.Dal/Migrations/` містить `InitialCreate`, знімок моделі `CatalogDbContextModelSnapshot.cs` і згенерований SQL-скрипт `InitialCreate.sql`.
+
+```powershell
+dotnet tool install --global dotnet-ef          # один раз
+
+# створити початкову міграцію (DbContext — у Dal, рядок підключення — в Api)
+dotnet ef migrations add InitialCreate `
+  --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api
+
+# застосувати до бази (SQL Server із §8 на localhost:1433)
+dotnet ef database update `
+  --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api
+
+# SQL-скрипт міграції для перегляду / ручного застосування (ідемпотентний)
+dotnet ef migrations script --idempotent `
+  --project Services/Catalog/Catalog.Dal --startup-project Services/Catalog/Catalog.Api `
+  -o Services/Catalog/Catalog.Dal/Migrations/InitialCreate.sql
+```
+
+Під час старту `Catalog.Api` викликає `Database.MigrateAsync()`, тож при запуску через Aspire міграції застосовуються автоматично.
+
+### 12.3 Сідінг (ідемпотентний, два режими)
+
+1. **Модельний (статичний)** — `HasData` у `CategoryConfiguration` і `TagConfiguration`: довідники з фіксованими Id (5 категорій, 5 тегів) потрапляють у міграцію як `InsertData`.
+2. **Програмний** — `Catalog.Dal/Seeding/DbInitializer.SeedAsync` у `Program.cs` після `MigrateAsync()`: 12 лотів з деталями, зображеннями й тегами. Спочатку перевіряє `AnyAsync` і виходить, якщо дані вже є, тому повторний запуск нічого не дублює. Довідники вставляються раніше (міграція), залежні записи — після.
+3. Програмний сідінг вимикається `Seeding:Enabled=false` (так у `appsettings.Production.json`) і ніколи не виконується в `Production`. Це сумісно з CI/CD.
+
+### 12.4 DAL: Async Generic Repository, специфічні репозиторії, Unit of Work
+
+- **`GenericRepository<T>`** на `DbSet<T>`: асинхронні `GetByIdAsync`, `GetAllAsync`, `AddAsync`, `ListAsync(spec)`, `FirstOrDefaultAsync(spec)`, `CountAsync(spec)`. `Update`/`Delete` лише змінюють стан у контексті й тому синхронні. Репозиторії **не зберігають зміни самі**.
+- **`ItemRepository.GetWithDetailsAsync` — Eager Loading:** `Include(Category)`, `Include(Detail)`, `Include(Images)`, `Include(ItemTags).ThenInclude(Tag)` + `AsSingleQuery()` — **один SQL-запит**.
+- **`CategoryRepository.GetWithItemsAsync` — Explicit Loading:** спочатку лише категорія (1-й запит), потім `Entry(category).Collection(c => c.Items).LoadAsync()` (2-й запит).
+- **`ItemTagRepository.GetRecentlyTaggedAsync` — LINQ to Entities M:N:** вибірка через проміжну сутність за її власним полем: `Where(it => it.Tag.Slug == slug && it.AddedAt >= since).OrderByDescending(it => it.AddedAt)`.
+- **`UnitOfWork`** об'єднує `Items`, `Categories`, `ItemTags`, `Tags` над одним `CatalogDbContext` і має **єдиний `SaveChangesAsync()`**: усі зміни бізнес-операції потрапляють у БД однією транзакцією. Помилки БД (унікальність 2601/2627, FK/CHECK 547, конкурентність) перетворюються на `ConflictException`.
+
+### 12.5 BLL: сервіси, DTO, AutoMapper, специфікації
+
+- Сервіси `ItemService`, `CategoryService`, `TagService` працюють **лише через `IUnitOfWork`**, EF Core і `DbContext` напряму не використовують. Правила, для яких потрібні інші дані з БД, перевіряє сервіс: унікальність SKU/slug → `ConflictException`, неіснуючий ресурс → `EntityNotFoundException`, неіснуюча категорія/тег у тілі запиту → `ValidationException`. Правила самої сутності перевіряє сутність.
+- DTO для кожного контракту (`ItemDto`, `ItemDetailsDto`, `CreateItemDto`, `UpdateItemDto`, `ItemQuery`, `PagedResult<T>`…), профілі AutoMapper `ItemProfile`, `CategoryProfile` (AutoMapper 14 — ліцензійний ключ не потрібен).
+- **Specification pattern (Ardalis.Specification).** `ItemsFilterSpec` описує Where/Include/OrderBy/Skip/Take окремо від репозиторію. Репозиторій лише застосовує її: `Set.WithSpecification(spec).ToListAsync()`. Друга специфікація `ItemsBySellerSpec` з іншими критеріями (і `TagBySlugSpec`) працює через той самий `WithSpecification()` без жодних змін у репозиторії.
+
+### 12.6 Пагінація, фільтрація й сортування — на рівні SQL
+
+Запит: `page` (з 1), `pageSize` (за замовчуванням 20, обмеження 1–100), фільтри `search` (назва або SKU), `categoryId`, `status`, `minEstimate`, `maxEstimate`, сортування `sortBy` ∈ {`title`, `sku`, `estimate`, `createdAt`} і `sortDir` ∈ {`asc`, `desc`}. Інші поля сортування → 400.
+
+Фільтри, `OrderBy` і `Skip/Take` входять у LINQ-вираз **до** `ToListAsync()`: SQL Server повертає лише потрібну сторінку (`OFFSET … ROWS FETCH NEXT … ROWS ONLY`). `totalCount` рахується окремим `COUNT(*)` за тими самими критеріями без пагінації.
+
+Відповідь — тіло й заголовки:
+
+```json
+{ "items": [ … ], "totalCount": 12, "page": 2, "pageSize": 5, "totalPages": 3, "hasNext": true, "hasPrevious": true }
+```
+
+Заголовки: `X-Total-Count`, `X-Total-Pages`, `X-Page`, `X-Page-Size`.
+
+### 12.7 Валідація, помилки, логування
+
+- **Валідація.** Прості правила — DataAnnotations на DTO (`[Required]`, `[StringLength]`, `[Range]`), їх автоматично перевіряє `[ApiController]`. Складні — FluentValidation в окремих класах `Catalog.Bll/Validation/` (формат SKU/slug/валюти, `EstimateHigh ≥ EstimateLow`, дозволені статуси й поля сортування, URL зображень). Правила не дублюються. Валідатори зареєстровані `AddValidatorsFromAssembly(...)` і **викликаються явно** в контролерах (`IValidator<T>.ValidateAsync`). Застарілий `AddFluentValidation` не використовується. В обох випадках відповідь — **400 `ValidationProblemDetails`** з переліком помилок по полях.
+- **ProblemDetails.** `GlobalExceptionHandler : IExceptionHandler` + `AddProblemDetails`: `EntityNotFoundException` → **404**, `ValidationException` → **400**, `ConflictException` і `DomainException` → **409**, інше → **500**. Стек і текст винятку — лише в Development, у Production — загальне повідомлення та `traceId`. Виняток логується **один раз** — в обробнику: власні Error-записи EF Core та `ExceptionHandlerMiddleware` про той самий збій вимкнено.
+- **Serilog** (`Serilog.AspNetCore`) налаштовано в `appsettings.json` (розділ `Serilog`):
+  - sink-и `Console` і `File` (`logs/catalog-*.json`, Compact JSON);
+  - рівні Information/Warning/Error;
+  - `Enrich.FromLogContext`; `CorrelationIdMiddleware` додає `CorrelationId` (заголовок `X-Correlation-Id`, повертається у відповіді), `RequestPath`, `UserId` (якщо користувач автентифікований);
+  - `UseSerilogRequestLogging`;
+  - SQL-команди EF Core (`Microsoft.EntityFrameworkCore.Database.Command` = Information) видно в лозі. Саме за ними перевіряється, що eager виконує один запит, а explicit — два.
+
+### 12.8 API
+
+| Метод і маршрут | Успіх | Помилки |
+|---|---|---|
+| `GET /api/items?page=&pageSize=&search=&categoryId=&status=&minEstimate=&maxEstimate=&sortBy=&sortDir=` | 200 | 400 |
+| `GET /api/items/by-seller/{sellerId}` | 200 | — |
+| `GET /api/items/{id}` (eager) | 200 | 404 |
+| `POST /api/items` | **201** + `Location` | 400, 409 |
+| `PUT /api/items/{id}` | **204** | 400, 404, 409 |
+| `POST /api/items/{id}/status` | **204** | 400, 404, 409 |
+| `PUT /api/items/{id}/tags/{tagId}`, `DELETE …/tags/{tagId}` | **204** | 404, 409 |
+| `DELETE /api/items/{id}` | **204** | 404, 409 |
+| `GET /api/categories`, `GET /api/categories/{id}` | 200 | 404 |
+| `GET /api/categories/{id}/items` (explicit) | 200 | 404 |
+| `POST /api/categories` | **201** + `Location` | 400, 409 |
+| `DELETE /api/categories/{id}` | **204** | 404, 409 |
+| `GET /api/tags`, `GET /api/tags/{slug}/items?since=` (M:N) | 200 | 404 |
+
+Swagger: `/swagger`.
+
+### 12.9 Запуск
+
+```bash
+dotnet run --project Platform.AppHost
+```
+
+В Aspire Dashboard з'являться `catalogdb` і `catalog-api`. API застосує міграції, виконає сідінг і стане *Healthy* (`/health` перевіряє і `CatalogDbContext`).
+
+**Без Aspire:** підніміть SQL Server за §8 і запустіть `dotnet run --project Services/Catalog/Catalog.Api --launch-profile http` (Swagger: http://localhost:5280/swagger). Рядок підключення — `ConnectionStrings:CatalogDb` у `appsettings.json`; змінна середовища `ConnectionStrings__CatalogDb` його перевизначає.
+
+Тести: `dotnet test Services/Catalog/Catalog.Tests`.
+
+**Docker-образ:** `docker build -f Services/Catalog/Catalog.Api/Dockerfile -t auctionhouse/catalog-api .` (з кореня репозиторію).
+
+### 12.10 Перевірка (контрольні точки)
+
+```bash
+BASE=http://localhost:5280
+
+# пагінація: totalCount = кількість усіх лотів у БД (12 після сідінгу), а не на сторінці
+curl -i "$BASE/api/items?page=2&pageSize=5"
+
+# фільтрація й сортування
+curl -s "$BASE/api/items?categoryId=2&status=Listed&sortBy=estimate&sortDir=desc"
+curl -s "$BASE/api/items?search=1st&minEstimate=500&sortBy=title"
+
+# 400: недозволене поле сортування
+curl -i "$BASE/api/items?sortBy=password"
+
+# 201 + Location
+curl -i -X POST "$BASE/api/items" -H "Content-Type: application/json" -d '{"categoryId":4,"sellerExternalId":"11111111-1111-1111-1111-111111111111","sku":"VNL-LZ-IV-UK1","title":"Led Zeppelin - IV, UK 1st Press, 1971","slug":"led-zeppelin-iv-uk-1st-press-1971","estimateLow":600,"estimateHigh":900,"currency":"USD","imageUrls":["https://img.example.com/lz-iv.jpg"],"tagIds":[1,3]}'
+
+# 409: повторне створення з тим самим SKU
+curl -i -X POST "$BASE/api/items" -H "Content-Type: application/json" -d '{"categoryId":4,"sellerExternalId":"11111111-1111-1111-1111-111111111111","sku":"VNL-LZ-IV-UK1","title":"Duplicate","slug":"duplicate-sku","estimateLow":600,"estimateHigh":900,"currency":"USD"}'
+
+# 400: порожня назва -> ValidationProblemDetails з переліком помилок по полях (не 500)
+curl -i -X POST "$BASE/api/items" -H "Content-Type: application/json" -d '{"categoryId":4,"sellerExternalId":"11111111-1111-1111-1111-111111111111","sku":"X-1","title":"","slug":"x-1","estimateLow":10,"estimateHigh":20,"currency":"USD"}'
+
+# 404 у форматі ProblemDetails
+curl -i "$BASE/api/items/999"
+
+# eager (1 SQL-запит у лозі) та explicit (2 запити)
+curl -s "$BASE/api/items/1"
+curl -s "$BASE/api/categories/2/items"
+
+# M:N через ItemTag.AddedAt; друга специфікація
+curl -s "$BASE/api/tags/rare/items"
+curl -s "$BASE/api/items/by-seller/22222222-2222-2222-2222-222222222222?page=1&pageSize=3"
+```
+
+Повторний запуск застосунку не дублює seed-дані: `GET /api/items` і далі повертає `totalCount` 12 (плюс створені вручну).
+
+### 12.11 Відповідність критеріям прийому (Лаба 3)
+
+| Критерій | Де виконано |
+|---|---|
+| Доменні сутності з інкапсульованими бізнес-правилами | `Catalog.Domain/Entities/` (`Item`, `Category`, `ItemDetail`, `ItemImage`, `Tag`, `ItemTag`), `Catalog.Domain/Exceptions/` |
+| Окремі `IEntityTypeConfiguration<T>`, підключені централізовано | `Catalog.Dal/Configurations/`, `CatalogDbContext.OnModelCreating` (`ApplyConfigurationsFromAssembly`) |
+| Зв'язки 1:1, 1:N і M:N через явну проміжну сутність | `ItemConfiguration` (1:1 Detail, 1:N Images, N:1 Category), `ItemTagConfiguration` (складений ключ + `AddedAt`) |
+| Початкова міграція в репозиторії | `Catalog.Dal/Migrations/` (`InitialCreate`, snapshot, `InitialCreate.sql`), `Platform.slnx`, `*.csproj` |
+| Async Generic Repository на DbSet і Unit of Work з єдиним SaveChangesAsync | `Catalog.Dal/Repositories/GenericRepository.cs`, `Catalog.Dal/UnitOfWork/UnitOfWork.cs` |
+| Три специфічні репозиторії: Eager, Explicit і LINQ-запит M:N | `ItemRepository`, `CategoryRepository`, `ItemTagRepository` |
+| Сервіси BLL через Unit of Work, DTO та AutoMapper | `Catalog.Bll/Services/`, `DTO/`, `Mapping/` |
+| Асинхронні контролери з коректними статусами та Swagger | `Catalog.Api/Controllers/`, `Program.cs` |
+| Ідемпотентний сідінг: HasData і програмний після MigrateAsync | `CategoryConfiguration`/`TagConfiguration` (`HasData`), `Catalog.Dal/Seeding/DbInitializer.cs`, `Program.cs` |
+| Пагінація, фільтрація й сортування на рівні SQL | `ItemQuery`, `PagedResult<T>`, `ItemsFilterSpec`, `GenericRepository.ListAsync/CountAsync`, `ItemsController.GetList` |
+| DataAnnotations + FluentValidation з ValidationProblemDetails | `Catalog.Bll/DTO/` (атрибути), `Catalog.Bll/Validation/`, контролери, `AddValidatorsFromAssembly` у `Program.cs` |
+| Глобальна обробка помилок ProblemDetails з мапінгом винятків | `Catalog.Api/ExceptionHandling/GlobalExceptionHandler.cs` |
+| Serilog зі структурованими властивостями | `Program.cs`, `appsettings*.json`, `Middleware/CorrelationIdMiddleware.cs` |
+| Specification pattern для складних запитів | `Catalog.Bll/Specifications/`, застосування в `GenericRepository` (`WithSpecification`) |
