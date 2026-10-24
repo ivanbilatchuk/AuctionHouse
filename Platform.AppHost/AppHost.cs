@@ -26,4 +26,13 @@ builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WaitFor(catalogDb)
     .WithHttpHealthCheck("/health");
 
+// Community: MongoDB; індекси й сідінг створює сам сервіс під час старту.
+var mongo = builder.AddMongoDB("mongo");
+var communityDb = mongo.AddDatabase("communitydb", "AuctionHouse_Community");
+
+builder.AddProject<Projects.Community_WebApi>("community-api")
+    .WithReference(communityDb)
+    .WaitFor(communityDb)
+    .WithHttpHealthCheck("/health");
+
 builder.Build().Run();

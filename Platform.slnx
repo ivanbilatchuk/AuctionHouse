@@ -15,4 +15,10 @@
     <Project Path="Services/Catalog/Catalog.Domain/Catalog.Domain.csproj" />
     <Project Path="Services/Catalog/Catalog.Tests/Catalog.Tests.csproj" />
   </Folder>
+  <Folder Name="/Services/Community/">
+    <Project Path="Services/Community/Community.Application/Community.Application.csproj" />
+    <Project Path="Services/Community/Community.Domain/Community.Domain.csproj" />
+    <Project Path="Services/Community/Community.Infrastructure/Community.Infrastructure.csproj" />
+    <Project Path="Services/Community/Community.WebApi/Community.WebApi.csproj" />
+  </Folder>
 </Solution>

@@ -1,6 +1,6 @@
 # AuctionHouse — аукціонний дім колекційних предметів
 
-**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core).
+**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core). **Практичне заняття № 04** (Community на MongoDB: Clean Architecture, CQRS + MediatR, pipeline behaviors) — у [§13](#13-лабораторна-4--clean-architecture--cqrs--mongodb).
 Три незалежні бази даних для подальшої розробки трьох мікросервісів (ASP.NET Core).
 
 | Проєкт | Контекст | СУБД і технологія доступу | Каталог у репозиторії |
@@ -26,15 +26,20 @@ AuctionHouse/
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
 ├── Platform.slnx                одне рішення на всю платформу
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + Auctions.Api + Catalog.Api
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Auctions.Api + Catalog.Api + Community.WebApi
 └── Services/
     ├── Auctions/                Проєкт №1 — ADO.NET + Dapper (Лаба 2)
-    └── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
-        ├── Catalog.Api/         контролери, Program.cs, appsettings*.json, Dockerfile
-        ├── Catalog.Bll/         сервіси, DTO, Mapping/, Validation/, Specifications/, Caching/
-        ├── Catalog.Dal/         CatalogDbContext, Configurations/, Migrations/, Repositories/, UnitOfWork/, Seeding/
-        ├── Catalog.Domain/      сутності, доменні винятки
-        └── Catalog.Tests/       модульні тести (xUnit)
+    ├── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
+    │   ├── Catalog.Api/         контролери, Program.cs, appsettings*.json, Dockerfile
+    │   ├── Catalog.Bll/         сервіси, DTO, Mapping/, Validation/, Specifications/, Caching/
+    │   ├── Catalog.Dal/         CatalogDbContext, Configurations/, Migrations/, Repositories/, UnitOfWork/, Seeding/
+    │   ├── Catalog.Domain/      сутності, доменні винятки
+    │   └── Catalog.Tests/       модульні тести (xUnit)
+    └── Community/               Проєкт №3 — Clean Architecture + CQRS + MongoDB (Лаба 4)
+        ├── Community.Domain/         сутності, value objects, інтерфейси репозиторіїв
+        ├── Community.Application/    Commands/, Queries/, Behaviors/, Caching/
+        ├── Community.Infrastructure/ Mongo-контекст, BSON-мапінг, репозиторії, індекси, сідінг
+        └── Community.WebApi/         контролери, Program.cs, обробка помилок
 ```
 
 ## Зміст
@@ -51,6 +56,7 @@ AuctionHouse/
 10. [Відповідність критеріям прийому (Лаба 1)](#10-відповідність-критеріям-прийому)
 11. [Лабораторна 2 — тришарова архітектура на ADO.NET та Dapper](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper)
 12. [Лабораторна 3 — тришарова архітектура на Entity Framework Core](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core)
+13. [Лабораторна 4 — Clean Architecture + CQRS + MongoDB](#13-лабораторна-4--clean-architecture--cqrs--mongodb)
 
 ---
 
@@ -1000,3 +1006,186 @@ curl -s "$BASE/api/items/by-seller/22222222-2222-2222-2222-222222222222?page=1&p
 | Глобальна обробка помилок ProblemDetails з мапінгом винятків | `Catalog.Api/ExceptionHandling/GlobalExceptionHandler.cs` |
 | Serilog зі структурованими властивостями | `Program.cs`, `appsettings*.json`, `Middleware/CorrelationIdMiddleware.cs` |
 | Specification pattern для складних запитів | `Catalog.Bll/Specifications/`, застосування в `GenericRepository` (`WithSpecification`) |
+
+---
+
+## 13. Лабораторна 4 — Clean Architecture + CQRS + MongoDB
+
+**Проєкт №3 (Community)** реалізовано як мікросервіс за Clean Architecture з CQRS на MediatR над MongoDB (`AuctionHouse_Community`, див. §6 і `db/p3`). Предметна область — **висновки експертів про автентичність лотів** (`ExpertOpinion`, аналог Review) і **обговорення аукціонів** (`Discussion` із вкладеними коментарями `Comment`).
+
+### 13.1 Чотири шари та напрямок залежностей
+
+```
+Community.WebApi ──► Community.Application ──► Community.Domain
+        │                     ▲                      ▲
+        └──► Community.Infrastructure ───────────────┘
+```
+
+| Шар | Залежить від | Вміст |
+|---|---|---|
+| **Domain** | — (лише пакет `MongoDB.Bson` заради типу `ObjectId`; **без** `MongoDB.Driver`, без атрибутів BSON) | `Common/BaseEntity`, `Common/ValueObject`, `Entities/`, `ValueObjects/`, `Exceptions/`, `Repositories/` (інтерфейси) |
+| **Application** | Domain | `Abstractions/Messaging` (`ICommand`, `ICommand<T>`, `IQuery<T>`), `Abstractions/Queries` (інтерфейси читання), `Commands/`, `Queries/`, `Behaviors/`, `Caching/`, `DTO/`, `Mapping/`, `Validation/`, `DependencyInjection.AddApplication` |
+| **Infrastructure** | Application, Domain | `Persistence/` (`MongoDbSettings`, `MongoDbContext`, `Mapping/MongoMappings`), `Repositories/`, `Queries/`, `Indexes/`, `Seeding/`, `HealthChecks/`, `DependencyInjection.AddInfrastructure` |
+| **WebApi** | Application, Infrastructure | `Controllers/`, `Contracts/`, `Mapping/`, `ExceptionHandling/`, `DependencyInjection.AddWebApi`, `Program.cs` |
+
+### 13.2 Доменний шар
+
+- **`BaseEntity`**: `Id` (`ObjectId`), `CreatedAt`, `UpdatedAt`, `Version`. Сетери приватні; `MarkUpdated()` оновлює `UpdatedAt` і збільшує `Version`.
+- **Сутності** (3): `ExpertOpinion` і `Discussion` — агрегати; `Comment` — вкладена сутність із власним `ObjectId`.
+  - Сетери приватні, для BSON передбачено приватний конструктор без параметрів.
+  - Колекції приватні (`_attributes`, `_comments`, `_replies`), назовні доступні лише як `IReadOnly…`.
+- **Бізнес-правила кидають доменні винятки** (`DomainException`, `NotFoundException`, `ConflictException`):
+  - набір обов'язкових атрибутів залежить від категорії (cards: `gradingCompany`, `grade`; stamps: `perforation`, `watermark`; vinyl: `matrixNumber`, `pressing`; coins: `metal`, `weightGrams`);
+  - вердикт, відмінний від `Authentic`, вимагає обґрунтування в `notes`;
+  - у закрите обговорення не можна писати;
+  - ліміт 500 повідомлень на обговорення;
+  - відповідь можна дати лише на існуючий коментар.
+- **`ValueObject`** з порівнянням за значеннями (`GetEqualityComponents`, `Equals`/`GetHashCode`/`==`). Value Objects (3) незмінні: без сетерів, з валідацією в конструкторі, вбудовані в сутності:
+  - `Person`: `UserId` і `DisplayName`; використовується як експерт і як автор коментаря;
+  - `Confidence`: значення 0–100;
+  - `ItemReference`: `ItemId` і знімок `Title` з Catalog, без FK.
+- **Інтерфейси репозиторіїв** `IExpertOpinionRepository` і `IDiscussionRepository` оголошено в `Domain/Repositories`. Інтерфейси читання `IExpertOpinionQueries` (аналог `IReviewQueries`) і `IDiscussionQueries` — в `Application/Abstractions/Queries`. Реалізації всіх чотирьох — в Infrastructure.
+
+### 13.3 CQRS з MediatR
+
+| Тип | Клас | Обробник | Валідатор |
+|---|---|---|---|
+| Command | `CreateExpertOpinionCommand : ICommand<ExpertOpinionDto>` | `CreateExpertOpinionCommandHandler` | так, з **асинхронним правилом до MongoDB**: один експерт — один висновок на лот |
+| Command | `UpdateExpertOpinionCommand : ICommand` (+ `Version`) | `UpdateExpertOpinionCommandHandler` | так |
+| Command | `DeleteExpertOpinionCommand : ICommand` | `DeleteExpertOpinionCommandHandler` | так (ObjectId) |
+| Command | `CreateDiscussionCommand : ICommand<DiscussionDto>` | `CreateDiscussionCommandHandler` | так, з асинхронним правилом: одне обговорення на аукціон |
+| Command | `AddCommentCommand : ICommand<CommentDto>` | `AddCommentCommandHandler` | так (ObjectId обговорення й батьківського коментаря) |
+| Query | `GetExpertOpinionByIdQuery : IQuery<ExpertOpinionDto>` | через `IExpertOpinionQueries.GetByIdAsync` | так (ObjectId) |
+| Query | `GetExpertOpinionsQuery : IQuery<PagedResult<…>>` | через `IExpertOpinionQueries.GetListAsync` | так (page, pageSize ≤ 100, enum-фільтри, sortBy) |
+| Query | `GetDiscussionByIdQuery : IQuery<DiscussionDto>` | через `IDiscussionQueries.GetByIdAsync` | так (ObjectId) |
+
+Обробники команд працюють асинхронно лише через інтерфейси репозиторіїв. Обробники запитів звертаються до інтерфейсів читання з Application, а реалізація в Infrastructure виконує `$match` → `$sort` → `$skip`/`$limit` → `$project` одразу в DTO (вкладені масиви коментарів проєктуються через `$map`). `totalCount` рахує `CountDocuments` з тим самим фільтром.
+
+**Реєстрація** (`Application/DependencyInjection.cs`):
+
+```csharp
+services.AddMediatR(cfg =>
+{
+    cfg.RegisterServicesFromAssembly(assembly);
+    cfg.AddOpenBehavior(typeof(LoggingBehavior<,>));      // 1 - зовнішній: логує все, включно з відмовами валідації
+    cfg.AddOpenBehavior(typeof(ValidationBehavior<,>));   // 2 - не пускає невалідний запит до обробника
+    cfg.AddOpenBehavior(typeof(PerformanceBehavior<,>));  // 3 - міряє лише сам обробник
+});
+```
+
+Кожен шар має власний DI-метод розширення: `AddApplication()`, `AddInfrastructure(configuration)`, `AddWebApi()`. `Program.cs` лише викликає їх по черзі.
+
+### 13.4 Pipeline behaviors
+
+- **`ValidationBehavior`** запускає всі `IValidator<TRequest>` (FluentValidation, разом з асинхронними правилами), **збирає всі помилки** й кидає `ValidationException` (словник «поле → помилки») **до виклику обробника**. Валідатори перевіряють, що рядкові ідентифікатори є коректним `ObjectId`.
+- **`LoggingBehavior`** пише структурований лог запиту й відповіді: `Handling {RequestName} {@Request}`, `Handled {RequestName} in {ElapsedMs} ms … {@Response}`, а при помилці — попередження з типом винятку.
+- **`PerformanceBehavior`** пише попередження `Slow request {RequestName} took {ElapsedMs} ms`, якщо обробник працює довше за 500 мс.
+
+### 13.5 Інфраструктура MongoDB
+
+- **`MongoDbContext`** отримує `IOptions<MongoDbSettings>` (секція `MongoDb` в `appsettings.json`: `ConnectionString`, `DatabaseName`, `SeedOnStartup`). Під Aspire рядок підключення `ConnectionStrings:communitydb` перекриває `MongoDb:ConnectionString`. Контекст відкриває колекції `expertOpinions` і `discussions`.
+- **`MongoMappings`** реєструє `BsonClassMap` **без жодного атрибута в домені**, один раз при старті (захист через `Interlocked`):
+  - конвенція **camelCase**, enum зберігаються рядком, невідомі поля ігноруються;
+  - `Guid` у форматі UUID Standard;
+  - приватні поля колекцій мапляться як `attributes` / `comments` / `replies` (`MapField`);
+  - Value Objects створюються через конструктор (`MapCreator`).
+- **Репозиторії** реалізують оптимістичну конкурентність: `ReplaceOne` з фільтром `{ _id, version: expected }`. Якщо `MatchedCount == 0`, документ змінив хтось інший, і репозиторій кидає `ConflictException` (409). `PUT` приймає `version` у тілі запиту.
+- **Індекси** створює `MongoIndexInitializer` під час старту, ідемпотентно (`CreateMany` з фіксованими назвами):
+
+  | Колекція | Індекси |
+  |---|---|
+  | `expertOpinions` | складений `ix_itemId_createdAt`; **unique** `ux_itemId_expert`; складений `ix_category_verdict`; **text** `tx_title_notes` для `?search=` |
+  | `discussions` | **unique** `ux_auctionId`; `ix_itemId` |
+
+- **Сідінг**: `IDataSeeder` → `MongoDataSeeder`.
+  - Якщо колекція вже містить документи, сідінг пропускається; інакше записує `InsertMany`: 10 висновків і 2 обговорення з коментарями та відповідями.
+  - Повторний запуск нічого не дублює.
+  - Вимикається `MongoDb:SeedOnStartup=false` (так налаштовано в `appsettings.Production.json`).
+  - Виклик: `await app.Services.InitializeMongoAsync()` у `Program.cs`.
+
+### 13.6 Web API
+
+Контролери працюють **лише через `ISender` та `IMapper`**: AutoMapper перетворює HTTP-контракт (`Contracts/`) на команду або запит, а відповідь бере з DTO. Профіль `Application/Mapping/ApplicationProfile` мапить `ObjectId → string`, Value Objects (`Person → PersonDto`, `Confidence → int`, `ItemReference → itemId/itemTitle`) і вкладені масиви (`Comment → CommentDto` з `Replies`). Swagger доступний на `/swagger`.
+
+| Метод і маршрут | Успіх | Помилки |
+|---|---|---|
+| `GET /api/expert-opinions?page=&pageSize=&itemId=&categoryKind=&verdict=&minConfidence=&search=&sortBy=&sortDir=` | 200 | 400 |
+| `GET /api/expert-opinions/{id}` | 200 | 400, 404 |
+| `POST /api/expert-opinions` | **201** + `Location: /api/expert-opinions/{objectId}` | 400, 409 |
+| `PUT /api/expert-opinions/{id}` | **204** | 400, 404, 409 (версія) |
+| `DELETE /api/expert-opinions/{id}` | **204** | 400, 404 |
+| `GET /api/discussions/{id}` | 200 | 400, 404 |
+| `POST /api/discussions` | **201** + `Location` | 400, 409 |
+| `POST /api/discussions/{id}/comments` | **201** | 400, 404, 409 |
+
+**ProblemDetails** (`ExceptionHandling/GlobalExceptionHandler`):
+
+| Виняток | Статус |
+|---|---|
+| `NotFoundException` | 404 |
+| `ValidationException` | 400 `ValidationProblemDetails` з `errors` |
+| `ConflictException`, `DomainException` | 409 |
+| `MongoWriteException` з категорією **DuplicateKey** | 409 |
+| `MongoConnectionException` / `TimeoutException` | **503** |
+| інше | 500 |
+
+Стек винятку додається до відповіді лише в Development.
+
+### 13.7 Запуск і перевірка
+
+```bash
+dotnet run --project Platform.AppHost
+```
+
+Aspire піднімає контейнер MongoDB (ресурси `mongo` → `communitydb`) і `community-api` (`/health` пінгує MongoDB). Під час старту сервіс створює індекси й виконує сідінг. Без Aspire підійде будь-який MongoDB на `localhost:27017`, напр. з `scripts/docker-compose.db.yml`: `dotnet run --project Services/Community/Community.WebApi --launch-profile http` (Swagger: http://localhost:5380/swagger).
+
+> Модель документів Лаби 4 (вкладені VO `item`, `confidence`, enum рядком) — нова версія схеми Проєкту №3. `$jsonSchema`-валідатори з `db/p3/collections.js` (Лаба 1) описують першу версію, тому для локального запуску без Aspire використовуйте базу без цих валідаторів, наприклад `MongoDb__DatabaseName=AuctionHouse_Community_v2`. Під Aspire база щоразу створюється наново, тож конфлікту немає.
+
+```bash
+BASE=http://localhost:5380
+
+# список із фільтрами, повнотекстовим пошуком і пагінацією
+curl -s "$BASE/api/expert-opinions?page=1&pageSize=5&categoryKind=Cards&sortBy=confidence&sortDir=desc"
+curl -s "$BASE/api/expert-opinions?search=PSA"
+
+# 201 + Location з рядковим ObjectId
+curl -i -X POST "$BASE/api/expert-opinions" -H "Content-Type: application/json" -d '{"itemId":5,"itemTitle":"Mewtwo Holo, Jungle Set 1999","categoryKind":"Cards","expert":{"userId":"77777777-7777-7777-7777-777777777777","displayName":"Ivan Melnyk"},"verdict":"Authentic","confidence":90,"attributes":{"gradingCompany":"CGC","grade":"8.5"}}'
+
+# 400: усі помилки одразу (невалідний вердикт, confidence, відсутні атрибути, повторний експерт)
+curl -i -X POST "$BASE/api/expert-opinions" -H "Content-Type: application/json" -d '{"itemId":1,"itemTitle":"","categoryKind":"Cards","expert":{"userId":"55555555-5555-5555-5555-555555555555","displayName":"X"},"verdict":"Maybe","confidence":150,"attributes":{}}'
+
+# 400: невалідний ObjectId; 404: коректний, але неіснуючий
+curl -i "$BASE/api/expert-opinions/not-an-id"
+curl -i "$BASE/api/expert-opinions/000000000000000000000000"
+
+# Оптимістична конкурентність: створюємо висновок і беремо його id (24 hex-символи) з відповіді
+ID=$(curl -s -X POST "$BASE/api/expert-opinions" -H "Content-Type: application/json" -d '{"itemId":10,"itemTitle":"Nirvana - Nevermind, US 1st Press, 1991","categoryKind":"Vinyl","expert":{"userId":"88888888-8888-8888-8888-888888888888","displayName":"Taras Kravets"},"verdict":"Authentic","confidence":85,"attributes":{"matrixNumber":"DGC-24425","pressing":"US 1st"}}' | grep -o '"id":"[0-9a-f]\{24\}"' | cut -d'"' -f4)
+echo "$ID"
+
+# 204: version збігається з поточною (1) -> оновлено, версія стає 2
+curl -i -X PUT "$BASE/api/expert-opinions/$ID" -H "Content-Type: application/json" -d '{"verdict":"Questionable","confidence":60,"attributes":{"matrixNumber":"DGC-24425","pressing":"US 1st"},"notes":"Re-checked the matrix","version":1}'
+
+# 409: той самий PUT ще раз зі старою версією 1 (документ уже має версію 2)
+curl -i -X PUT "$BASE/api/expert-opinions/$ID" -H "Content-Type: application/json" -d '{"verdict":"Questionable","confidence":60,"attributes":{"matrixNumber":"DGC-24425","pressing":"US 1st"},"notes":"Re-checked the matrix","version":1}'
+```
+
+> `<id>` у маршруті має бути справжнім ObjectId: рядок на кшталт `<id>` не проходить `ValidationBehavior` і дає 400, а не 409.
+
+### 13.8 Відповідність критеріям прийому (Лаба 4)
+
+| Критерій | Де виконано |
+|---|---|
+| Чотири шари з правильним напрямком залежностей | `Platform.slnx`, `Community.*.csproj` (Domain → нічого; Application → Domain; Infrastructure → Application/Domain; WebApi → Application, Infrastructure) |
+| Доменні сутності з BaseEntity та інкапсуляцією | `Community.Domain/Common/BaseEntity.cs`, `Entities/` (`ExpertOpinion`, `Discussion`, `Comment`), `Exceptions/` |
+| Базовий ValueObject і 2–3 незмінні Value Objects | `Common/ValueObject.cs`, `ValueObjects/` (`Person`, `Confidence`, `ItemReference`) |
+| Інтерфейси репозиторіїв у внутрішньому шарі | `Community.Domain/Repositories/`, `Community.Application/Abstractions/Queries/` |
+| Команди Create/Update/Delete з окремими обробниками | `Community.Application/Commands/`, `Abstractions/Messaging/` |
+| Запити GetById / GetList через інтерфейс читання з пагінацією в MongoDB | `Application/Queries/`, `Abstractions/Queries/IExpertOpinionQueries.cs`, `Infrastructure/Queries/` |
+| Реєстрація MediatR зі скануванням і порядком behaviors; DI-метод на кожен шар | `Application/DependencyInjection.cs`, `Infrastructure/DependencyInjection.cs`, `WebApi/DependencyInjection.cs`, `Program.cs` |
+| ValidationBehavior з валідаторами FluentValidation | `Application/Behaviors/ValidationBehavior.cs`, `*CommandValidator.cs`, `*QueryValidator.cs`, `Validation/ValidationRules.cs` |
+| LoggingBehavior і PerformanceBehavior | `Application/Behaviors/` |
+| MongoDbContext через IOptions і BsonClassMap без атрибутів у домені | `Infrastructure/Persistence/MongoDbContext.cs`, `MongoDbSettings.cs`, `Mapping/MongoMappings.cs` |
+| Репозиторій на MongoDB Driver з оптимістичною конкурентністю | `Infrastructure/Repositories/` |
+| Контролери лише через ISender, AutoMapper і Swagger | `WebApi/Controllers/`, `WebApi/Mapping/RequestProfile.cs`, `Application/Mapping/ApplicationProfile.cs` |
+| ProblemDetails з підтримкою MongoDB-винятків | `WebApi/ExceptionHandling/GlobalExceptionHandler.cs` |
+| Ідемпотентний сідінг, автоматичні індекси й конфігурація MongoDB | `Infrastructure/Seeding/`, `Infrastructure/Indexes/MongoIndexInitializer.cs`, `WebApi/appsettings.json` (`MongoDb`), `Program.cs` |
