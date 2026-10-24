@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/Platform/">
+    <Project Path="Platform.AppHost/Platform.AppHost.csproj" />
+  </Folder>
+  <Folder Name="/Services/Auctions/">
+    <Project Path="Services/Auctions/Auctions.Api/Auctions.Api.csproj" />
+    <Project Path="Services/Auctions/Auctions.Bll/Auctions.Bll.csproj" />
+    <Project Path="Services/Auctions/Auctions.Dal/Auctions.Dal.csproj" />
+    <Project Path="Services/Auctions/Auctions.Domain/Auctions.Domain.csproj" />
+  </Folder>
+  <Folder Name="/Services/Catalog/">
+    <Project Path="Services/Catalog/Catalog.Api/Catalog.Api.csproj" />
+    <Project Path="Services/Catalog/Catalog.Bll/Catalog.Bll.csproj" />
+    <Project Path="Services/Catalog/Catalog.Dal/Catalog.Dal.csproj" />
+    <Project Path="Services/Catalog/Catalog.Domain/Catalog.Domain.csproj" />
+    <Project Path="Services/Catalog/Catalog.Tests/Catalog.Tests.csproj" />
+  </Folder>
+</Solution>

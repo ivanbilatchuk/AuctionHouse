@@ -10,3 +10,13 @@ Thumbs.db
 # local env / data
 .env
 *.log
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+launchSettings.local.json
+
+# logs
+logs/
