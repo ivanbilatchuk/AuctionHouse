@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" Version="13.0.0" />
+    <PackageReference Include="Aspire.Hosting.MongoDB" Version="13.0.0" />
     <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.0.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.*" />
   </ItemGroup>
@@ -17,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Services\Auctions\Auctions.Api\Auctions.Api.csproj" />
     <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
+    <ProjectReference Include="..\Services\Community\Community.WebApi\Community.WebApi.csproj" />
   </ItemGroup>
 
 </Project>
