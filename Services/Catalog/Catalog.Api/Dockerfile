@@ -7,9 +7,11 @@ COPY Services/Catalog/Catalog.Domain/Catalog.Domain.csproj Services/Catalog/Cata
 COPY Services/Catalog/Catalog.Dal/Catalog.Dal.csproj Services/Catalog/Catalog.Dal/
 COPY Services/Catalog/Catalog.Bll/Catalog.Bll.csproj Services/Catalog/Catalog.Bll/
 COPY Services/Catalog/Catalog.Api/Catalog.Api.csproj Services/Catalog/Catalog.Api/
+COPY Platform.ServiceDefaults/Platform.ServiceDefaults.csproj Platform.ServiceDefaults/
 RUN dotnet restore Services/Catalog/Catalog.Api/Catalog.Api.csproj
 
 COPY Services/Catalog/ Services/Catalog/
+COPY Platform.ServiceDefaults/ Platform.ServiceDefaults/
 RUN dotnet publish Services/Catalog/Catalog.Api/Catalog.Api.csproj -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

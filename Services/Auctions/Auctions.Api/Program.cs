@@ -6,8 +6,12 @@ using Auctions.Bll.Validation;
 using Auctions.Dal.Interfaces;
 using Auctions.Dal.Uow;
 using Microsoft.OpenApi.Models;
+using Platform.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Serilog, OpenTelemetry, health checks, service discovery, стійкість HttpClient (Platform.ServiceDefaults).
+builder.AddServiceDefaults();
 
 // Рядок підключення береремо з конфігурації: appsettings.json або змінна середовища
 // ConnectionStrings__AuctionsDb (саме її підставляє .NET Aspire через WithReference).
@@ -51,6 +55,8 @@ builder.Services.AddScoped<IBidService, BidService>();
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
+
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 
@@ -58,7 +64,7 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();
 app.MapControllers();
 
 app.Run();

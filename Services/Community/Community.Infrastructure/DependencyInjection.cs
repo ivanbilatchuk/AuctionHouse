@@ -11,13 +11,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using MongoDB.Driver;
+using MongoDB.Driver.Core.Extensions.DiagnosticSources;
 
 namespace Community.Infrastructure;
 
 public static class DependencyInjection
 {
-    // Ім'я рядка підключення, який підставляє .NET Aspire (WithReference(communitydb)).
-    public const string AspireConnectionName = "communitydb";
+    // Ім'я рядка підключення, який підставляє .NET Aspire (WithReference(CommunityDb)).
+    public const string AspireConnectionName = "CommunityDb";
 
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
@@ -35,6 +37,15 @@ public static class DependencyInjection
                 "MongoDb:ConnectionString and MongoDb:DatabaseName are required.")
             .ValidateOnStart();
 
+        // Клієнт підписано на події драйвера: кожна команда MongoDB стає спаном OpenTelemetry
+        // (джерело "MongoDB.Driver.Core.Extensions.DiagnosticSources" зареєстровано в ServiceDefaults).
+        services.AddSingleton<IMongoClient>(sp =>
+        {
+            var mongoSettings = sp.GetRequiredService<IOptions<MongoDbSettings>>().Value;
+            var clientSettings = MongoClientSettings.FromConnectionString(mongoSettings.ConnectionString);
+            clientSettings.ClusterConfigurator = cluster => cluster.Subscribe(new DiagnosticsActivityEventSubscriber());
+            return new MongoClient(clientSettings);
+        });
         services.AddSingleton<MongoDbContext>();
         services.AddScoped<IExpertOpinionRepository, ExpertOpinionRepository>();
         services.AddScoped<IDiscussionRepository, DiscussionRepository>();

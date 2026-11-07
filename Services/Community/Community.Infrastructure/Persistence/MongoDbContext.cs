@@ -9,11 +9,10 @@ public sealed class MongoDbContext
     public const string ExpertOpinionsCollection = "expertOpinions";
     public const string DiscussionsCollection = "discussions";
 
-    public MongoDbContext(IOptions<MongoDbSettings> options)
+    public MongoDbContext(IOptions<MongoDbSettings> options, IMongoClient client)
     {
-        var settings = options.Value;
-        Client = new MongoClient(settings.ConnectionString);
-        Database = Client.GetDatabase(settings.DatabaseName);
+        Client = client;
+        Database = Client.GetDatabase(options.Value.DatabaseName);
     }
 
     public IMongoClient Client { get; }

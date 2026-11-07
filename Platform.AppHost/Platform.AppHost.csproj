@@ -19,6 +19,8 @@
     <ProjectReference Include="..\Services\Auctions\Auctions.Api\Auctions.Api.csproj" />
     <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
     <ProjectReference Include="..\Services\Community\Community.WebApi\Community.WebApi.csproj" />
+    <ProjectReference Include="..\Platform.Aggregator\Platform.Aggregator.csproj" />
+    <ProjectReference Include="..\Platform.ApiGateway\Platform.ApiGateway.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,8 +1,12 @@
 using Community.Application;
 using Community.Infrastructure;
 using Community.WebApi;
+using Platform.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Serilog, OpenTelemetry, health checks, service discovery, стійкість HttpClient (Platform.ServiceDefaults).
+builder.AddServiceDefaults();
 
 builder.Services
     .AddApplication()
@@ -10,6 +14,8 @@ builder.Services
     .AddWebApi();
 
 var app = builder.Build();
+
+app.UseMiddleware<CorrelationIdMiddleware>();
 
 // Індекси MongoDB і ідемпотентний сідінг (IDataSeeder) під час старту.
 await app.Services.InitializeMongoAsync();
@@ -21,7 +27,7 @@ app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();
 app.MapControllers();
 
 await app.RunAsync();

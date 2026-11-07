@@ -1,3 +1,4 @@
+using Auctions.Bll.Diagnostics;
 using Auctions.Bll.DTO;
 using Auctions.Dal.Interfaces;
 using Auctions.Domain.Exceptions;
@@ -43,6 +44,11 @@ public sealed class BidService : IBidService
 
     public async Task<BidDto> PlaceBidAsync(long auctionId, PlaceBidDto dto, CancellationToken cancellationToken = default)
     {
+        using var activity = AuctionsTelemetry.ActivitySource.StartActivity("PlaceBid");
+        activity?.SetTag("auction.id", auctionId);
+        activity?.SetTag("bid.bidder_id", dto.BidderId);
+        activity?.SetTag("bid.amount", dto.Amount);
+
         var bid = await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
             var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -110,7 +116,9 @@ public sealed class BidService : IBidService
             return newBid;
         }, cancellationToken);
 
-        _logger.LogInformation("Bid {BidId} of {Amount} placed on auction {AuctionId}", bid.BidId, bid.Amount, auctionId);
+        activity?.SetTag("bid.id", bid.BidId);
+        _logger.LogInformation("Bid {BidId} of {Amount} placed on auction {AuctionId} by bidder {BidderId}",
+            bid.BidId, bid.Amount, auctionId, bid.BidderId);
 
         return _mapper.Map<BidDto>(bid);
     }

@@ -1,3 +1,4 @@
+using Auctions.Bll.Diagnostics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Validation;
 using Auctions.Dal.Interfaces;
@@ -57,6 +58,9 @@ public sealed class AuctionService : IAuctionService
 
     public async Task<AuctionDto> CreateAsync(CreateAuctionDto dto, CancellationToken cancellationToken = default)
     {
+        using var activity = AuctionsTelemetry.ActivitySource.StartActivity("CreateAuction");
+        activity?.SetTag("auction.item_id", dto.ItemId);
+
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         _validator.ValidateCreate(dto, now);
 
@@ -74,7 +78,9 @@ public sealed class AuctionService : IAuctionService
             return await _unitOfWork.Auctions.AddAsync(auction, cancellationToken);
         }, cancellationToken);
 
-        _logger.LogInformation("Auction {AuctionId} created for item {ItemId}", auctionId, auction.ItemId);
+        activity?.SetTag("auction.id", auctionId);
+        _logger.LogInformation("Auction {AuctionId} created for item {ItemId} with starting price {StartingPrice}, status {Status}",
+            auctionId, auction.ItemId, auction.StartingPrice, auction.Status);
 
         return await GetByIdAsync(auctionId, cancellationToken);
     }
@@ -119,11 +125,16 @@ public sealed class AuctionService : IAuctionService
 
     public async Task<AuctionDto> ChangeStatusAsync(long id, ChangeAuctionStatusDto dto, CancellationToken cancellationToken = default)
     {
+        using var activity = AuctionsTelemetry.ActivitySource.StartActivity("ChangeAuctionStatus");
+        activity?.SetTag("auction.id", id);
+        activity?.SetTag("auction.requested_status", dto.Status);
+
         _validator.ValidateStatus(dto.Status);
 
         var newStatus = await _unitOfWork.Auctions.ChangeStatusAsync(id, dto.Status, dto.Reason, cancellationToken);
 
-        _logger.LogInformation("Auction {AuctionId} status changed to {Status}", id, newStatus);
+        activity?.SetTag("auction.status", newStatus);
+        _logger.LogInformation("Auction {AuctionId} status changed to {Status} (requested {RequestedStatus})", id, newStatus, dto.Status);
 
         return await GetByIdAsync(id, cancellationToken);
     }

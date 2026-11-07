@@ -1,6 +1,6 @@
 # AuctionHouse — аукціонний дім колекційних предметів
 
-**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core). **Практичне заняття № 04** (Community на MongoDB: Clean Architecture, CQRS + MediatR, pipeline behaviors) — у [§13](#13-лабораторна-4--clean-architecture--cqrs--mongodb).
+**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core). **Практичне заняття № 04** (Community на MongoDB: Clean Architecture, CQRS + MediatR, pipeline behaviors) — у [§13](#13-лабораторна-4--clean-architecture--cqrs--mongodb). **Практичне заняття № 05** (платформа на .NET Aspire: ServiceDefaults, API Gateway на YARP, Aggregator, CorrelationId, OpenTelemetry) — у [§14](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire).
 Три незалежні бази даних для подальшої розробки трьох мікросервісів (ASP.NET Core).
 
 | Проєкт | Контекст | СУБД і технологія доступу | Каталог у репозиторії |
@@ -26,7 +26,10 @@ AuctionHouse/
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
 ├── Platform.slnx                одне рішення на всю платформу
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Auctions.Api + Catalog.Api + Community.WebApi
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + 3 сервіси + Aggregator + API Gateway
+├── Platform.ServiceDefaults/    спільні Serilog, OpenTelemetry, health checks, service discovery, CorrelationId (Лаба 5)
+├── Platform.ApiGateway/         YARP: єдина точка входу http://localhost:5000 (Лаба 5)
+├── Platform.Aggregator/         композитна картка аукціону з трьох сервісів (Лаба 5)
 └── Services/
     ├── Auctions/                Проєкт №1 — ADO.NET + Dapper (Лаба 2)
     ├── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
@@ -57,6 +60,7 @@ AuctionHouse/
 11. [Лабораторна 2 — тришарова архітектура на ADO.NET та Dapper](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper)
 12. [Лабораторна 3 — тришарова архітектура на Entity Framework Core](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core)
 13. [Лабораторна 4 — Clean Architecture + CQRS + MongoDB](#13-лабораторна-4--clean-architecture--cqrs--mongodb)
+14. [Лабораторна 5 — мікросервісна платформа на .NET Aspire](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire)
 
 ---
 
@@ -667,7 +671,7 @@ SELECT (SELECT COUNT(*) FROM AuctionHouse_Auctions.dbo.Bid) AS Bids,
 
 ```
 Platform.slnx
-Platform.AppHost/                 AppHost.cs: SQL Server (контейнер) + база auctionsdb + Auctions.Api
+Platform.AppHost/                 AppHost.cs: SQL Server (контейнер) + база AuctionsDb + Auctions.Api
 Services/Auctions/
 ├── Auctions.Api/                 Controllers/, ExceptionHandling/ (ProblemDetails), Program.cs, appsettings.json
 ├── Auctions.Bll/                 Services/, DTO/, Mapping/ (AutoMapper), Validation/, Caching/ (зарезервовано)
@@ -736,9 +740,9 @@ Services/Auctions/
 dotnet run --project Platform.AppHost
 ```
 
-1. У консолі з'явиться посилання на **Aspire Dashboard** — відкрийте його. Ресурси `sql`, `auctionsdb` та `auctions-api` мають перейти у стан *Running*; health check `auctions-api` (`/health`) — *Healthy*.
+1. У консолі з'явиться посилання на **Aspire Dashboard** — відкрийте його. Ресурси `sql`, `AuctionsDb` та `auctions-api` мають перейти у стан *Running*; health check `auctions-api` (`/health`) — *Healthy*.
 2. AppHost створює базу `AuctionHouse_Auctions` і виконує `db/p1/schema.sql → procedures.sql → seed.sql` (скрипти ідемпотентні).
-3. URL `auctions-api` беріть із Dashboard; Swagger — `<url>/swagger`. Пароль SQL Server Aspire генерує сам, рядок підключення підставляється в API автоматично (`ConnectionStrings__auctionsdb`).
+3. URL `auctions-api` беріть із Dashboard; Swagger — `<url>/swagger`. Пароль SQL Server задається параметром `sql-password` (з Лаби 5, див. §14), рядок підключення підставляється в API автоматично (`ConnectionStrings__AuctionsDb`).
 
 Запуск з Visual Studio / Rider: стартовий проєкт — `Platform.AppHost`.
 
@@ -942,7 +946,7 @@ Swagger: `/swagger`.
 dotnet run --project Platform.AppHost
 ```
 
-В Aspire Dashboard з'являться `catalogdb` і `catalog-api`. API застосує міграції, виконає сідінг і стане *Healthy* (`/health` перевіряє і `CatalogDbContext`).
+В Aspire Dashboard з'являться `CatalogDb` і `catalog-api`. API застосує міграції, виконає сідінг і стане *Healthy* (`/health` перевіряє і `CatalogDbContext`).
 
 **Без Aspire:** підніміть SQL Server за §8 і запустіть `dotnet run --project Services/Catalog/Catalog.Api --launch-profile http` (Swagger: http://localhost:5280/swagger). Рядок підключення — `ConnectionStrings:CatalogDb` у `appsettings.json`; змінна середовища `ConnectionStrings__CatalogDb` його перевизначає.
 
@@ -1083,7 +1087,7 @@ services.AddMediatR(cfg =>
 
 ### 13.5 Інфраструктура MongoDB
 
-- **`MongoDbContext`** отримує `IOptions<MongoDbSettings>` (секція `MongoDb` в `appsettings.json`: `ConnectionString`, `DatabaseName`, `SeedOnStartup`). Під Aspire рядок підключення `ConnectionStrings:communitydb` перекриває `MongoDb:ConnectionString`. Контекст відкриває колекції `expertOpinions` і `discussions`.
+- **`MongoDbContext`** отримує `IOptions<MongoDbSettings>` (секція `MongoDb` в `appsettings.json`: `ConnectionString`, `DatabaseName`, `SeedOnStartup`). Під Aspire рядок підключення `ConnectionStrings:CommunityDb` перекриває `MongoDb:ConnectionString`. Контекст відкриває колекції `expertOpinions` і `discussions`.
 - **`MongoMappings`** реєструє `BsonClassMap` **без жодного атрибута в домені**, один раз при старті (захист через `Interlocked`):
   - конвенція **camelCase**, enum зберігаються рядком, невідомі поля ігноруються;
   - `Guid` у форматі UUID Standard;
@@ -1137,9 +1141,9 @@ services.AddMediatR(cfg =>
 dotnet run --project Platform.AppHost
 ```
 
-Aspire піднімає контейнер MongoDB (ресурси `mongo` → `communitydb`) і `community-api` (`/health` пінгує MongoDB). Під час старту сервіс створює індекси й виконує сідінг. Без Aspire підійде будь-який MongoDB на `localhost:27017`, напр. з `scripts/docker-compose.db.yml`: `dotnet run --project Services/Community/Community.WebApi --launch-profile http` (Swagger: http://localhost:5380/swagger).
+Aspire піднімає контейнер MongoDB (ресурси `mongo` → `CommunityDb`) і `community-api` (`/health` пінгує MongoDB). Під час старту сервіс створює індекси й виконує сідінг. Без Aspire підійде будь-який MongoDB на `localhost:27017`, напр. з `scripts/docker-compose.db.yml`: `dotnet run --project Services/Community/Community.WebApi --launch-profile http` (Swagger: http://localhost:5380/swagger).
 
-> Модель документів Лаби 4 (вкладені VO `item`, `confidence`, enum рядком) — нова версія схеми Проєкту №3. `$jsonSchema`-валідатори з `db/p3/collections.js` (Лаба 1) описують першу версію, тому для локального запуску без Aspire використовуйте базу без цих валідаторів, наприклад `MongoDb__DatabaseName=AuctionHouse_Community_v2`. Під Aspire база щоразу створюється наново, тож конфлікту немає.
+> Модель документів Лаби 4 (вкладені VO `item`, `confidence`, enum рядком) — нова версія схеми Проєкту №3. `$jsonSchema`-валідатори з `db/p3/collections.js` (Лаба 1) описують першу версію, тому для локального запуску без Aspire використовуйте базу без цих валідаторів, наприклад `MongoDb__DatabaseName=AuctionHouse_Community_v2`. Під Aspire базу створює сам сервіс (без валідаторів Лаби 1), тож конфлікту немає; з Лаби 5 дані зберігаються в Docker-томі (`WithDataVolume`).
 
 ```bash
 BASE=http://localhost:5380
@@ -1189,3 +1193,178 @@ curl -i -X PUT "$BASE/api/expert-opinions/$ID" -H "Content-Type: application/jso
 | Контролери лише через ISender, AutoMapper і Swagger | `WebApi/Controllers/`, `WebApi/Mapping/RequestProfile.cs`, `Application/Mapping/ApplicationProfile.cs` |
 | ProblemDetails з підтримкою MongoDB-винятків | `WebApi/ExceptionHandling/GlobalExceptionHandler.cs` |
 | Ідемпотентний сідінг, автоматичні індекси й конфігурація MongoDB | `Infrastructure/Seeding/`, `Infrastructure/Indexes/MongoIndexInitializer.cs`, `WebApi/appsettings.json` (`MongoDb`), `Program.cs` |
+
+## 14. Лабораторна 5 — мікросервісна платформа на .NET Aspire
+
+Три сервіси (Auctions, Catalog, Community) об'єднано в платформу: спільні налаштування в **`Platform.ServiceDefaults`**, єдина точка входу **`Platform.ApiGateway`** (YARP, `http://localhost:5000`) і **`Platform.Aggregator`**, що складає картку аукціону з трьох сервісів. Наскрізний `X-Correlation-Id`, структуровані JSON-логи (Serilog) і трейси/метрики OpenTelemetry видно в Aspire Dashboard.
+
+### 14.1 Структура і залежності
+
+```
+Platform.AppHost ──► усі проєкти нижче (оркестрація; на AppHost не посилається ніхто)
+
+Platform.ApiGateway ─┐
+Platform.Aggregator ─┤
+Auctions.Api ────────┼──► Platform.ServiceDefaults   (єдиний платформний проєкт, на який посилаються сервіси)
+Catalog.Api ─────────┤
+Community.WebApi ────┘
+```
+
+Порядок запуску в `Platform.AppHost/AppHost.cs` (через `WithReference` + `WaitFor`): **БД → сервіси → aggregator → gateway**.
+
+| Ресурс Aspire | Що це | Рядок підключення / адреса |
+|---|---|---|
+| `sql` (+ `AuctionsDb`, `CatalogDb`) | SQL Server, пароль — параметр `sql-password`, `WithDataVolume()` | `ConnectionStrings:AuctionsDb`, `ConnectionStrings:CatalogDb` |
+| `mongo` (+ `CommunityDb`) | MongoDB, `WithDataVolume()` | `ConnectionStrings:CommunityDb` |
+| `auctions-api`, `catalog-api`, `community-api` | сервіси | `http://<ім'я>` через service discovery |
+| `aggregator` | композитні запити | `http://aggregator` |
+| `api-gateway` | YARP | **`http://localhost:5000`** (ендпоінт `public`) |
+
+Імена ресурсів БД збігаються з іменами рядків підключення, які читають сервіси, а фізичні назви баз лишилися `AuctionHouse_Auctions/_Catalog/_Community`. Кожен сервіс зберігає fallback-рядок у своєму `appsettings.json` для запуску без Aspire.
+
+### 14.2 Запуск
+
+Потрібні .NET 10 SDK і запущений Docker.
+
+```bash
+# один раз: пароль SQL Server (мін. 8 символів, великі/малі літери, цифри, спецсимвол)
+dotnet user-secrets set Parameters:sql-password "AuctionHouse_Dev#2026" --project Platform.AppHost
+
+dotnet run --project Platform.AppHost
+```
+
+Посилання на Dashboard з'явиться в консолі. Усі ресурси мають перейти в *Running* / *Healthy*. Gateway слухає **http://localhost:5000**, Swagger агрегатора відкривається з Dashboard (`aggregator` → `/swagger`).
+
+> Дані SQL Server і MongoDB лежать у Docker-томах, тож переживають перезапуск AppHost. Якщо змінити `sql-password` після першого запуску, у томі залишиться старий пароль, і SQL Server його не прийме. Тоді видаліть том (`docker volume ls`, `docker volume rm <том sql>`) або поверніть старий пароль.
+
+### 14.3 Platform.ServiceDefaults
+
+`Platform.ServiceDefaults/Extensions.cs`. Проєкт зроблено за шаблоном `aspire-servicedefaults` (`IsAspireSharedProject`, `FrameworkReference Microsoft.AspNetCore.App`).
+
+- **`AddServiceDefaults()`** — Serilog, OpenTelemetry, health checks, `AddServiceDiscovery`, `AddHttpContextAccessor`, `ConfigureHttpClientDefaults` (`AddStandardResilienceHandler` + `AddServiceDiscovery` + `AddHttpMessageHandler<CorrelationIdHandler>`).
+- **Serilog** — `builder.Services.AddSerilog(..., writeToProviders: true)`. Мінімальний рівень Debug у Development і Information в інших середовищах. Для `Microsoft.EntityFrameworkCore` і `System.Net.Http.HttpClient` рівень Warning. Збагачувачі: `FromLogContext`, `ServiceName`, `EnvironmentName`, `MachineName`, `ThreadId`. Вивід — `Console(new CompactJsonFormatter())`. Через `writeToProviders` ті самі події йдуть в OpenTelemetry-провайдер, тобто в Dashboard → *Structured logs*.
+- **OpenTelemetry**:
+  - логи з `IncludeFormattedMessage` і `IncludeScopes`;
+  - метрики AspNetCore, HttpClient і Runtime;
+  - трейси з `AddSource(ApplicationName)`, `AddSource("AuctionHouse.*")` (бізнес-спани), `AddSource("MongoDB.Driver.Core.Extensions.DiagnosticSources")` та інструментаціями AspNetCore, HttpClient і SqlClient;
+  - ресурс із `service.name` і `deployment.environment`;
+  - семплер: `AlwaysOnSampler` у Development, `ParentBased(TraceIdRatioBased(OpenTelemetry:SamplingRatio))` в інших середовищах;
+  - `UseOtlpExporter()`, якщо задано `OTEL_EXPORTER_OTLP_ENDPOINT` (Aspire задає його сам).
+- **`MapDefaultEndpoints()`** — `/health` (усі перевірки, зокрема БД) і `/alive` (лише `live`). Він замінив `MapHealthChecks("/health")` у сервісах.
+- **CorrelationId** — `CorrelationIdMiddleware.cs`:
+  - бере `X-Correlation-Id` із запиту або генерує новий GUID (і пише про це в лог);
+  - записує id назад у `Request.Headers`, щоб його переслали YARP і `CorrelationIdHandler`;
+  - повертає id у заголовку відповіді;
+  - додає `LogContext.PushProperty("CorrelationId")` і тег `correlation.id` на поточний спан;
+  - логує межі запиту: `Request started {Method} {Path}` і `Request finished with {StatusCode} in {Elapsed} ms`.
+
+  `CorrelationIdHandler.cs` (`DelegatingHandler`) додає заголовок до кожного вихідного запиту `HttpClient`.
+- **MongoDB** — `Community.Infrastructure/DependencyInjection.cs` реєструє `IMongoClient`, підписаний на `DiagnosticsActivityEventSubscriber` через `ClusterConfigurator`, тож кожна команда до MongoDB з'являється в трейсі.
+
+У кожному сервісі `Program.cs` викликає `builder.AddServiceDefaults()`, одразу після `Build()` додає `app.UseMiddleware<CorrelationIdMiddleware>()`, а замість `MapHealthChecks` — `app.MapDefaultEndpoints()`. У Catalog прибрано власні `UseSerilog`/bootstrap-логер, `UseSerilogRequestLogging` і `Middleware/CorrelationIdMiddleware` з Лаби 3 (їх дублює ServiceDefaults). Секцію `Serilog` з `appsettings*.json` прибрано, бо логи тепер ідуть у консоль JSON і в Dashboard, а не у файл.
+
+### 14.4 Бізнес-логи і власні спани
+
+Поза `Program.cs`/`appsettings` у сервісах додано **лише рядки логування та ActivitySource**, бізнес-логіку не змінено. Єдиний виняток — Community.Infrastructure, де `MongoClient` тепер створюється в DI (потрібно для підписника діагностики).
+
+| Сервіс | ActivitySource | Спани | Структуровані властивості логів |
+|---|---|---|---|
+| Auctions | `AuctionHouse.Auctions` (`Auctions.Bll/Diagnostics/AuctionsTelemetry.cs`) | `CreateAuction`, `PlaceBid`, `ChangeAuctionStatus` (`AuctionService`, `BidService`) | `AuctionId`, `ItemId`, `StartingPrice`, `Status`, `BidId`, `Amount`, `BidderId` |
+| Catalog | `AuctionHouse.Catalog` (`Catalog.Bll/Diagnostics/CatalogTelemetry.cs`) | `CreateItem`, `ChangeItemStatus` (`ItemService`) | `ItemId`, `Sku`, `CategoryId`, `PreviousStatus`, `Status` |
+| Community | `AuctionHouse.Community` (`Community.Application/Diagnostics/CommunityTelemetry.cs`) | `CreateExpertOpinion` (`CreateExpertOpinionCommandHandler`) | `OpinionId`, `ItemId`, `Verdict`, `Confidence` |
+| Aggregator | `AuctionHouse.Aggregator` | `BuildAuctionCard` | `AuctionId`, `Service`, `Elapsed`, `WarningsCount` |
+
+Персональні дані (email, імена учасників, `SellerExternalId`) у логи й теги не потрапляють.
+
+### 14.5 API Gateway (YARP)
+
+`Platform.ApiGateway/appsettings.json`, секція `ReverseProxy`. Шляхи з `{**catch-all}` збігаються і з `/api/items`, і з `/api/items/1/...`.
+
+| Маршрут | Order | Кластер → адреса (service discovery) |
+|---|---|---|
+| `/api/aggregator/{**catch-all}` | 1 | `aggregator` → `http://aggregator` |
+| `/api/auctions/{**catch-all}`, `/api/bidders/{**catch-all}` | 10 | `auctions` → `http://auctions-api` |
+| `/api/items/…`, `/api/categories/…`, `/api/tags/…` | 10 | `catalog` → `http://catalog-api` (`LoadBalancingPolicy: RoundRobin`) |
+| `/api/expert-opinions/…`, `/api/discussions/…` | 10 | `community` → `http://community-api` |
+
+Додатково налаштовано `HttpRequest.ActivityTimeout = 00:00:30`, `MaxRequestBodySize` (1 МБ) на маршрутах, що приймають тіло, і `Metadata` (`Team`, `Version`). `Program.cs`: `AddReverseProxy().LoadFromConfig(...).AddServiceDiscoveryDestinationResolver()`, далі `CorrelationIdMiddleware` → `GatewayLoggingMiddleware` → `MapDefaultEndpoints()` → `MapReverseProxy()`.
+
+`GatewayLoggingMiddleware` пише один запис на запит: `{Method} {Path} -> route {Route} cluster {Cluster}: {StatusCode} in {Elapsed} ms, {ResponseSize} bytes, client {ClientIp}`. Помилки проксі з `IForwarderErrorFeature` (таймаут, відмова з'єднання) логуються окремо як `Proxy error {ProxyError} ... {ExceptionType} {ExceptionMessage}`.
+
+### 14.6 Aggregator: картка аукціону
+
+`GET /api/aggregator/auctions/{id}/full` (`Controllers/AuctionCardsController.cs` → `Services/AuctionCardService.cs`). Покупець на сторінці лота одним запитом отримує все потрібне для рішення про ставку: стан аукціону, опис лота з каталогу, висновки експертів про автентичність і останні ставки.
+
+1. `AuctionsClient` → `GET /api/auctions/{id}`. Якщо аукціону немає — **404**, якщо Auctions недоступний — **503** (без аукціону картки немає).
+2. Паралельно через `Task.WhenAll`:
+   - `CatalogClient` → `GET /api/items/{itemId}`;
+   - `CommunityClient` → `GET /api/expert-opinions?itemId={itemId}`;
+   - `AuctionsClient` → `GET /api/auctions/{id}/bids`.
+
+   `CancellationToken` передається всюди, `.Result`/`Task.WaitAll` немає.
+3. Кожен виклик обгорнуто в `SafeAsync`, який логує `Calling {Service} for auction {AuctionId}` і `{Service} responded in {Elapsed} ms`. Винятки `HttpRequestException`, таймаут (`TaskCanceledException` не від клієнта, `TimeoutRejectedException`), `BrokenCircuitException` і `JsonException` додають до `warnings` запис на кшталт `"community service is unavailable"`. Відповідь лишається **200**, а не 500.
+4. Перевірки узгодженості дають попередження: лот із каталогу має `id == auction.itemId`, назва лота в аукціоні збігається з каталогом, висновки належать саме цьому `itemId` (чужі відкидаються).
+
+Типізовані клієнти (`Clients/`) зареєстровані як `AddHttpClient<T>(c => c.BaseAddress = new("https+http://auctions-api"))` тощо. Вони десеріалізують відповіді через System.Text.Json в DTO агрегатора (`Dto/`). Таймаути resilience-хендлера скорочено: спроба 2 с, загалом 5 с, одна повторна спроба (секція `Aggregator` в `appsettings.json`), тож недоступний сервіс швидко перетворюється на попередження.
+
+Відповідь — `AuctionCardDto(auction, lot?, expertOpinions, recentBids, summary?, warnings)` у camelCase, null-поля пропускаються (`ConfigureHttpJsonOptions` + `AddControllers().AddJsonOptions`, `WhenWritingNull`). `summary` містить `nextMinimumBid`, `reserveMet`, `priceVsEstimate` (поточна ціна відносно оцінки каталогу), `expertConsensus`, `averageConfidence`, `timeLeft`.
+
+### 14.7 Приклади запитів (через Gateway)
+
+```bash
+GW=http://localhost:5000
+
+# Auctions
+curl -s "$GW/api/auctions"
+curl -s "$GW/api/auctions/1"
+curl -s "$GW/api/auctions/1/bids"
+curl -s "$GW/api/bidders"
+
+# Catalog
+curl -s "$GW/api/items?page=1&pageSize=5"
+curl -s "$GW/api/items/1"
+curl -s "$GW/api/categories"
+curl -s "$GW/api/tags"
+
+# Community
+curl -s "$GW/api/expert-opinions?itemId=1"
+curl -s "$GW/api/discussions/<id>"   # <id> — ObjectId обговорення (24 hex-символи), напр. з POST /api/discussions
+
+# Aggregator: повна картка аукціону; власний correlation id повертається в заголовку відповіді
+curl -s -i -H "X-Correlation-Id: demo-lab5-001" "$GW/api/aggregator/auctions/1/full"
+
+# 404: аукціону немає
+curl -s -i "$GW/api/aggregator/auctions/999/full"
+```
+
+### 14.8 Сценарій часткової відмови
+
+1. У Dashboard зупиніть ресурс **`community-api`** (кнопка *Stop*).
+2. Повторіть `curl -s "$GW/api/aggregator/auctions/1/full"`. Відповідь буде **200** з аукціоном, лотом і ставками, `expertOpinions: []` і `"warnings": ["community service is unavailable"]`. В агрегаторі з'явиться Warning `community is unavailable for auction 1 after … ms`.
+3. `curl -i "$GW/api/expert-opinions?itemId=1"` поверне **502**, а в логах `api-gateway` з'явиться `Proxy error ...` з типом помилки.
+4. Запустіть `community-api` знову (*Start*), і попередження зникне.
+
+**Що показати в Dashboard:**
+- *Resources* — усі ресурси Running/Healthy;
+- *Traces* — трейс запиту `GET /api/aggregator/auctions/1/full`: api-gateway → aggregator → три паралельні виклики → SQL/MongoDB-спани;
+- *Structured logs* — фільтр `CorrelationId = demo-lab5-001` показує записи всіх сервісів для одного запиту.
+
+### 14.9 Відповідність критеріям прийому (Лаба 5)
+
+| № | Критерій | Де виконано |
+|---|---|---|
+| 1 | Структура рішення, посилання між проєктами | `Platform.slnx`; `Platform.AppHost.csproj` посилається на всі сервіси, Gateway і Aggregator; сервіси, Gateway й Aggregator посилаються лише на `Platform.ServiceDefaults` |
+| 2 | SQL-пароль-параметр, томи, імена БД = імена рядків підключення | `Platform.AppHost/AppHost.cs` (`AddParameter("sql-password", secret: true)`, `WithDataVolume()`, `AuctionsDb`/`CatalogDb`/`CommunityDb`); `Community.Infrastructure/DependencyInjection.cs` (`AspireConnectionName = "CommunityDb"`) |
+| 3 | Порядок запуску й фіксований порт Gateway | `Platform.AppHost/AppHost.cs` (`WithReference` + `WaitFor`, `WithHttpEndpoint(port: 5000, name: "public")`) |
+| 4 | Сервіси на ServiceDefaults | `Services/*/*.Api/Program.cs`, `Community.WebApi/Program.cs`, `appsettings.json` (fallback-рядки підключення) |
+| 5 | Бізнес-логи і власні спани | `Auctions.Bll/Services/AuctionService.cs`, `BidService.cs`, `Catalog.Bll/Services/ItemService.cs`, `Community.Application/Commands/ExpertOpinions/CreateExpertOpinion/CreateExpertOpinionCommandHandler.cs`, `*/Diagnostics/*Telemetry.cs` |
+| 6 | Serilog, health checks, service discovery, HttpClient defaults | `Platform.ServiceDefaults/Extensions.cs`, `Platform.ServiceDefaults.csproj` |
+| 7 | CorrelationId middleware і handler | `Platform.ServiceDefaults/CorrelationIdMiddleware.cs`, `CorrelationIdHandler.cs`; `Platform.ApiGateway/Program.cs` |
+| 8 | OpenTelemetry (логи, метрики, трейси, семплер, OTLP, MongoDB) | `Platform.ServiceDefaults/Extensions.cs`; `Community.Infrastructure/DependencyInjection.cs` (`DiagnosticsActivityEventSubscriber`) |
+| 9 | Маршрути й кластери YARP | `Platform.ApiGateway/appsettings.json`, `Program.cs` (`AddServiceDiscoveryDestinationResolver`) |
+| 10 | Логування й помилки проксі | `Platform.ApiGateway/GatewayLoggingMiddleware.cs`, `Program.cs` |
+| 11 | Типізовані клієнти агрегатора | `Platform.Aggregator/Clients/`, `Program.cs` |
+| 12 | Ендпоінт `/api/aggregator/auctions/{id}/full` з паралельними викликами | `Platform.Aggregator/Controllers/AuctionCardsController.cs`, `Services/AuctionCardService.cs` |
+| 13 | Часткові відмови, короткі таймаути | `Services/AuctionCardService.cs` (`SafeAsync`), `Program.cs` (`HttpStandardResilienceOptions`), `appsettings.json` (`Aggregator`) |
+| 14 | Композитний DTO, camelCase, WhenWritingNull, перевірки узгодженості, Swagger | `Platform.Aggregator/Dto/AuctionCardDto.cs`, `Services/AuctionCardService.cs`, `Program.cs` |
+| 15 | Документація | цей розділ (§14) |
