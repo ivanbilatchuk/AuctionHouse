@@ -1,13 +1,15 @@
 using AutoMapper;
+using Catalog.Bll.Diagnostics;
 using Catalog.Bll.DTO;
 using Catalog.Bll.Specifications;
 using Catalog.Dal.Interfaces;
 using Catalog.Domain.Entities;
 using Catalog.Domain.Exceptions;
+using Microsoft.Extensions.Logging;
 
 namespace Catalog.Bll.Services;
 
-public sealed class ItemService(IUnitOfWork uow, IMapper mapper) : IItemService
+public sealed class ItemService(IUnitOfWork uow, IMapper mapper, ILogger<ItemService> logger) : IItemService
 {
     public async Task<PagedResult<ItemDto>> GetListAsync(ItemQuery query, CancellationToken ct = default)
     {
@@ -41,6 +43,9 @@ public sealed class ItemService(IUnitOfWork uow, IMapper mapper) : IItemService
 
     public async Task<ItemDetailsDto> CreateAsync(CreateItemDto input, CancellationToken ct = default)
     {
+        using var activity = CatalogTelemetry.ActivitySource.StartActivity("CreateItem");
+        activity?.SetTag("item.category_id", input.CategoryId);
+
         var sku = input.Sku.Trim().ToUpperInvariant();
         var slug = input.Slug.Trim().ToLowerInvariant();
 
@@ -71,6 +76,10 @@ public sealed class ItemService(IUnitOfWork uow, IMapper mapper) : IItemService
         await uow.Items.AddAsync(item, ct);
         await uow.SaveChangesAsync(ct);
 
+        activity?.SetTag("item.id", item.Id);
+        logger.LogInformation("Item {ItemId} ({Sku}) created in category {CategoryId} with status {Status}",
+            item.Id, sku, item.CategoryId, item.Status);
+
         return await GetByIdAsync(item.Id, ct);
     }
 
@@ -95,8 +104,13 @@ public sealed class ItemService(IUnitOfWork uow, IMapper mapper) : IItemService
 
     public async Task ChangeStatusAsync(long id, ChangeItemStatusDto input, CancellationToken ct = default)
     {
+        using var activity = CatalogTelemetry.ActivitySource.StartActivity("ChangeItemStatus");
+        activity?.SetTag("item.id", id);
+        activity?.SetTag("item.requested_status", input.Status);
+
         var item = await uow.Items.GetByIdAsync(id, ct)
             ?? throw new EntityNotFoundException(nameof(Item), id);
+        var previousStatus = item.Status;
 
         switch (Enum.Parse<ItemStatus>(input.Status, ignoreCase: true))
         {
@@ -108,6 +122,9 @@ public sealed class ItemService(IUnitOfWork uow, IMapper mapper) : IItemService
         }
 
         await uow.SaveChangesAsync(ct);
+
+        activity?.SetTag("item.status", item.Status.ToString());
+        logger.LogInformation("Item {ItemId} status changed from {PreviousStatus} to {Status}", id, previousStatus, item.Status);
     }
 
     public async Task AddTagAsync(long id, long tagId, CancellationToken ct = default)

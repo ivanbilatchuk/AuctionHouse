@@ -1,17 +1,24 @@
 using AutoMapper;
+using Community.Application.Diagnostics;
 using Community.Application.DTO;
 using Community.Domain.Entities;
 using Community.Domain.Repositories;
 using Community.Domain.ValueObjects;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Community.Application.Commands.ExpertOpinions.CreateExpertOpinion;
 
-public sealed class CreateExpertOpinionCommandHandler(IExpertOpinionRepository repository, IMapper mapper)
+public sealed class CreateExpertOpinionCommandHandler(
+    IExpertOpinionRepository repository, IMapper mapper, ILogger<CreateExpertOpinionCommandHandler> logger)
     : IRequestHandler<CreateExpertOpinionCommand, ExpertOpinionDto>
 {
     public async Task<ExpertOpinionDto> Handle(CreateExpertOpinionCommand request, CancellationToken cancellationToken)
     {
+        using var activity = CommunityTelemetry.ActivitySource.StartActivity("CreateExpertOpinion");
+        activity?.SetTag("opinion.item_id", request.ItemId);
+        activity?.SetTag("opinion.verdict", request.Verdict);
+
         var opinion = new ExpertOpinion(
             new ItemReference(request.ItemId, request.ItemTitle),
             Enum.Parse<CategoryKind>(request.CategoryKind, ignoreCase: true),
@@ -22,6 +29,10 @@ public sealed class CreateExpertOpinionCommandHandler(IExpertOpinionRepository r
             request.Notes);
 
         await repository.AddAsync(opinion, cancellationToken);
+
+        activity?.SetTag("opinion.id", opinion.Id.ToString());
+        logger.LogInformation("Expert opinion {OpinionId} created for item {ItemId}: verdict {Verdict}, confidence {Confidence}",
+            opinion.Id.ToString(), request.ItemId, opinion.Verdict, request.Confidence);
 
         return mapper.Map<ExpertOpinionDto>(opinion);
     }
