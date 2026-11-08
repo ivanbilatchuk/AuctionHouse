@@ -1,6 +1,6 @@
 # AuctionHouse — аукціонний дім колекційних предметів
 
-**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core). **Практичне заняття № 04** (Community на MongoDB: Clean Architecture, CQRS + MediatR, pipeline behaviors) — у [§13](#13-лабораторна-4--clean-architecture--cqrs--mongodb). **Практичне заняття № 05** (платформа на .NET Aspire: ServiceDefaults, API Gateway на YARP, Aggregator, CorrelationId, OpenTelemetry) — у [§14](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire).
+**Практичне заняття № 01.** Проєктування та розробка баз даних для мікросервісної архітектури. **Практичне заняття № 02** (тришарова архітектура Auctions, ADO.NET + Dapper, .NET Aspire) — у [§11](#11-лабораторна-2--тришарова-архітектура-на-adonet-та-dapper). **Практичне заняття № 03** (Catalog на EF Core: Code First, міграції, пагінація, валідація, Serilog, специфікації) — у [§12](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core). **Практичне заняття № 04** (Community на MongoDB: Clean Architecture, CQRS + MediatR, pipeline behaviors) — у [§13](#13-лабораторна-4--clean-architecture--cqrs--mongodb). **Практичне заняття № 05** (платформа на .NET Aspire: ServiceDefaults, API Gateway на YARP, Aggregator, CorrelationId, OpenTelemetry) — у [§14](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire). **Практичне заняття № 06** (gRPC між Aggregator і сервісами, дворівневий кеш IMemoryCache + Redis, інвалідація, метрики кешу) — у [§15](#15-лабораторна-6--grpc-і-дворівневе-кешування).
 Три незалежні бази даних для подальшої розробки трьох мікросервісів (ASP.NET Core).
 
 | Проєкт | Контекст | СУБД і технологія доступу | Каталог у репозиторії |
@@ -26,7 +26,7 @@ AuctionHouse/
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
 ├── Platform.slnx                одне рішення на всю платформу
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + 3 сервіси + Aggregator + API Gateway
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Redis + 3 сервіси + Aggregator + API Gateway
 ├── Platform.ServiceDefaults/    спільні Serilog, OpenTelemetry, health checks, service discovery, CorrelationId (Лаба 5)
 ├── Platform.ApiGateway/         YARP: єдина точка входу http://localhost:5000 (Лаба 5)
 ├── Platform.Aggregator/         композитна картка аукціону з трьох сервісів (Лаба 5)
@@ -45,6 +45,34 @@ AuctionHouse/
         └── Community.WebApi/         контролери, Program.cs, обробка помилок
 ```
 
+## Швидкий старт / Запуск платформи
+
+Потрібні **.NET 10 SDK** і запущений **Docker**. Усі команди виконуються з кореня репозиторію.
+
+```bash
+# 1. Один раз: пароль SQL Server для Aspire (секрет AppHost)
+dotnet user-secrets set Parameters:sql-password "AuctionHouse_Dev#2026" --project Platform.AppHost
+
+# 2. Запуск усієї платформи: SQL Server, MongoDB, Redis, auctions-api, catalog-api, community-api, aggregator, api-gateway
+dotnet run --project Platform.AppHost
+```
+
+Посилання на **Aspire Dashboard** з'явиться в консолі; у ньому видно ресурси, логи, трейси й метрики. Єдина точка входу — **API Gateway: http://localhost:5000**.
+
+```bash
+GW=http://localhost:5000
+
+curl -s "$GW/api/auctions/1"                      # Auctions (SQL Server, Dapper)
+curl -s "$GW/api/items/1"                         # Catalog (SQL Server, EF Core)
+curl -s "$GW/api/expert-opinions?itemId=1"        # Community (MongoDB)
+
+# Aggregator: повна картка аукціону з трьох сервісів (за замовчуванням через gRPC)
+curl -s -i -H "X-Correlation-Id: demo-001" "$GW/api/aggregator/auctions/1/full"
+curl -s -i "$GW/api/aggregator/auctions/1/full?transport=http&noCache=true"   # той самий результат через HTTP/JSON
+```
+
+Деталі: платформа й Gateway — [§14](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire), gRPC і кеш — [§15](#15-лабораторна-6--grpc-і-дворівневе-кешування).
+
 ## Зміст
 
 1. [Предметна область і три контексти](#1-предметна-область-і-три-контексти)
@@ -61,6 +89,7 @@ AuctionHouse/
 12. [Лабораторна 3 — тришарова архітектура на Entity Framework Core](#12-лабораторна-3--тришарова-архітектура-на-entity-framework-core)
 13. [Лабораторна 4 — Clean Architecture + CQRS + MongoDB](#13-лабораторна-4--clean-architecture--cqrs--mongodb)
 14. [Лабораторна 5 — мікросервісна платформа на .NET Aspire](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire)
+15. [Лабораторна 6 — gRPC і дворівневе кешування](#15-лабораторна-6--grpc-і-дворівневе-кешування)
 
 ---
 
@@ -1368,3 +1397,147 @@ curl -s -i "$GW/api/aggregator/auctions/999/full"
 | 13 | Часткові відмови, короткі таймаути | `Services/AuctionCardService.cs` (`SafeAsync`), `Program.cs` (`HttpStandardResilienceOptions`), `appsettings.json` (`Aggregator`) |
 | 14 | Композитний DTO, camelCase, WhenWritingNull, перевірки узгодженості, Swagger | `Platform.Aggregator/Dto/AuctionCardDto.cs`, `Services/AuctionCardService.cs`, `Program.cs` |
 | 15 | Документація | цей розділ (§14) |
+
+## 15. Лабораторна 6 — gRPC і дворівневе кешування
+
+Aggregator тепер звертається до сервісів через **gRPC** (HTTP/2, protobuf). Сервіси читають дані через **дворівневий кеш**: L1 — `IMemoryCache` у процесі, L2 — **Redis** через `IDistributedCache`, і тільки потім БД. Після кожного запису кеш інвалідується синхронно. Попадання й промахи видно в метриках `cache.hits` / `cache.misses`.
+
+### 15.1 Запуск
+
+Як у [Швидкому старті](#швидкий-старт--запуск-платформи): `dotnet run --project Platform.AppHost`. Додатковий ресурс **`redis`** (контейнер Redis із томом `WithDataVolume()`) Aspire піднімає сам. Сервіси й aggregator стартують лише після нього (`WithReference(redis).WaitFor(redis)`).
+
+```
+                     REST (HTTP/1.1)                      gRPC (HTTP/2, h2c)
+клієнт ──► api-gateway :5000 ──► aggregator ──► _grpc.auctions-api / _grpc.catalog-api / _grpc.community-api
+                    │                 │                       │
+                    └──► сервіси (REST)                       ▼
+                                      ▼              L1 IMemoryCache ─► L2 Redis ─► SQL Server / MongoDB
+                               Redis: aggregator:auction:{id}:full:{transport} (30 с)
+```
+
+### 15.2 gRPC: контракти, сервери, ендпоінт HTTP/2
+
+| Файл `.proto` | package / `csharp_namespace` | RPC |
+|---|---|---|
+| `Services/Auctions/Auctions.Api/Protos/auctions.proto` | `auctions` / `Auctions.Grpc` | `GetAuction(id)`, `GetBids(auction_id, limit)` |
+| `Services/Catalog/Catalog.Api/Protos/catalog.proto` | `catalog` / `Catalog.Grpc` | `GetItem(id)`, `GetItemsByIds(ids)` |
+| `Services/Community/Community.WebApi/Protos/community.proto` | `community` / `Community.Grpc` | `GetOpinionsForItem(item_id, page_size)` |
+
+- **Типи в контрактах:** `proto3`, грошові суми — десятковий рядок в інваріантній культурі (без втрат `decimal`), дати — `google.protobuf.Timestamp`, необов'язкові поля — `optional`. Повідомлення містять усе, що потрібно `AuctionCardDto`.
+- **Генерація коду:** у csproj сервісів `<Protobuf Include="Protos\x.proto" GrpcServices="Server" />`, в `Platform.Aggregator.csproj` — ті самі файли з `GrpcServices="Client"`. Контракт має одне джерело.
+- **Реалізації** лежать у `<Service>.Api/Grpc/` (`AuctionsGrpcService`, `CatalogGrpcService`, `Community.WebApi/Grpc/CommunityGrpcService`). Це тонкі адаптери над BLL або MediatR `ISender`, тому читання йдуть через кеш. Невалідний аргумент дає `InvalidArgument`, відсутній запис — `NotFound`, недоступна MongoDB — `Unavailable`. Очікувані помилки ніколи не повертаються як `Internal`.
+- **Реєстрація:** `AddGrpc(o => o.Interceptors.Add<GrpcLoggingInterceptor>())` і `MapGrpcService<T>()`. Interceptor (`Platform.ServiceDefaults/GrpcLoggingInterceptor.cs`) логує `GrpcMethod`, `GrpcPeer`, `GrpcStatus` і `Elapsed`: для `RpcException` — Warning зі статусом, для неочікуваного винятку — Error.
+
+**Окремий ендпоінт HTTP/2 без TLS.** Dev-сертифікат на Linux не довірений, тому gRPC працює по h2c (HTTP/2 без TLS). Kestrel не може віддавати HTTP/1.1 і h2c на одному порту без TLS, тому кожен сервіс має два ендпоінти в `appsettings.json`:
+
+```json
+"Kestrel": {
+  "Endpoints": {
+    "http": { "Url": "http://localhost:5280", "Protocols": "Http1" },
+    "grpc": { "Url": "http://localhost:5281", "Protocols": "Http2" }
+  }
+}
+```
+
+Aspire 13 читає `Kestrel:Endpoints` проєкту і створює ресурсні ендпоінти `http` і `grpc` (з `transport: http2`). Їхні порти він підставляє змінними `Kestrel__Endpoints__<name>__Url`. Я перевірив це маніфестом (`dotnet run --project Platform.AppHost -- --publisher manifest --output-path manifest.json`): у `catalog-api` є прив'язки `http` і `grpc`, а aggregator отримує `services__catalog-api__grpc__0`. Порти без Aspire: auctions 5180/5181, catalog 5280/5281, community 5380/5381.
+
+**Клієнти в Aggregator** (`Platform.Aggregator/Program.cs`):
+
+```csharp
+builder.Services.AddGrpcClient<AuctionsService.AuctionsServiceClient>(o => o.Address = new Uri("http://_grpc.auctions-api"));
+builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"));
+builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"));
+```
+
+`_grpc.<ресурс>` — це іменований ендпоінт для service discovery. gRPC-клієнти побудовані на тому самому `IHttpClientFactory`, тож `ConfigureHttpClientDefaults` із ServiceDefaults додає їм service discovery, resilience (у агрегаторі — спроба 2 с, загалом 5 с) і `CorrelationIdHandler`. Через нього `X-Correlation-Id` потрапляє в gRPC metadata.
+
+### 15.3 Агрегація через gRPC
+
+`Platform.Aggregator/Services/AuctionCardService.cs` + `Clients/GrpcCardDataSource.cs` (gRPC) і `Clients/HttpCardDataSource.cs` (HTTP з Лаби 5):
+
+1. Перевіряється кеш готової картки в Redis (`Caching/AuctionCardCache.cs`). Якщо є попадання, сервіси не викликаються взагалі.
+2. Викликається `GetAuction`. `NotFound` дає **404**, недоступність Auctions — **503**.
+3. `Task.WhenAll(GetItem, GetOpinionsForItem, GetBids)` виконуються паралельно, `CancellationToken` передається в кожен виклик.
+4. `SafeAsync` перехоплює `RpcException` зі статусами `Unavailable`, `DeadlineExceeded`, `Cancelled` (якщо скасування не від клієнта) та `Internal`/`Unknown`, а також мережеві помилки HTTP. Замість 500 до `warnings` додається запис на кшталт `"community service is unavailable"`.
+5. Повна картка без warnings кладеться в Redis на 30 с. Часткова відповідь не кешується.
+
+**Транспорт:** `?transport=grpc` (за замовчуванням) або `?transport=http` — щоб порівняти затримки. `?noCache=true` вимикає кеш картки, кеші сервісів при цьому працюють як завжди. У відповіді є заголовки `X-Aggregator-Transport` і `X-Aggregator-Cache: hit|miss|bypass`, а в лозі — `Building auction card {AuctionId} via {Transport}`.
+
+### 15.4 Дворівневий кеш
+
+Реалізацію написано вручну, у кожному сервісі однакова: `Caching/TwoLevelCache.cs`, `CacheEntrySettings.cs`, `CacheMetrics.cs` у `Auctions.Bll/Caching/`, `Catalog.Bll/Caching/`, `Community.Application/Caching/`.
+
+- **Порядок читання:** L1 → L2 → БД. На зворотному шляху заповнюються обидва рівні (дані з Redis теж кладуться в L1).
+- **L1:** `AddMemoryCache(o => o.SizeLimit = 1024)` у `Program.cs`. Кожен запис має `Size = 1`, `SlidingExpiration` і `AbsoluteExpirationRelativeToNow`. TTL на L1 завжди коротший, ніж на L2 (`CacheEntrySettings.Validate()`).
+- **L2:** `builder.AddRedisDistributedCache("redis")` (Aspire.StackExchange.Redis.DistributedCaching), серіалізація System.Text.Json, префікси ключів `catalog:` / `auctions:` / `community:` / `aggregator:`.
+- **Збій Redis:** виняток перехоплюється і логується як Warning `Redis (L2) … failed … Falling back to database`. Після цього L2 пропускається 30 с, і дані беруться з БД. Таймаути Redis короткі (connect 2 с, операція 1 с), тож сервіс не падає й довго не зависає.
+- **Cache-aside** зроблено декораторами з тієї ж папки `Caching/`: `CachedItemService`, `CachedCategoryService`, `CachedAuctionService`, `CachedBidService`. У Community — MediatR `CachingBehavior` для запитів з `ICacheableQuery` (`GetExpertOpinionsQuery`), він стоїть після валідації.
+- **Інвалідація** відбувається синхронно одразу після запису. Пишеться лог `Cache invalidated {CacheKey}, reason {Reason}` і збільшується лічильник `cache.invalidations`.
+
+| Ключ | L1 (sliding / absolute) | L2 (Redis) | Коли інвалідується |
+|---|---|---|---|
+| `catalog:item:{id}` | 1 хв / 5 хв | 10 хв | PUT лота, зміна статусу, додавання/видалення тегу, видалення |
+| `catalog:categories:all` | 5 хв / 10 хв | 1 год | створення/видалення категорії |
+| `auctions:auction:{id}` | 5 с / 10 с | 30 с | PUT, зміна статусу, нова ставка, видалення |
+| `auctions:auction:{id}:bids` | 5 с / 10 с | 30 с | нова ставка, видалення аукціону |
+| `community:opinions:item:{itemId}:p:{page}:s:{size}:v:{версія}` | 30 с / 1 хв | 5 хв | створення/оновлення/видалення висновку (видаляється ключ версії `community:opinions:item:{itemId}:version`) |
+| `aggregator:auction:{id}:full:{transport}` | — | 30 с | лише TTL (коротший за кеші сервісів); часткові картки не кешуються |
+
+У Community ключ містить «версію списку». Коли висновки змінюються, обробник команди видаляє ключ версії, і всі сторінки для цього лота одразу стають недосяжними, хоча фізично доживають свій TTL у Redis.
+
+**Метрики** (`CacheMetrics`, `IMeterFactory`): meter-и `AuctionHouse.Catalog.Cache`, `AuctionHouse.Auctions.Cache`, `AuctionHouse.Community.Cache`, `AuctionHouse.Aggregator.Cache`. Лічильники `cache.hits` / `cache.misses` мають тег `cache.level = L1|L2` і `cache.key_type` (напр. `catalog:item`), є також `cache.invalidations`. Усі вони реєструються в ServiceDefaults через `.WithMetrics(m => m.AddMeter("AuctionHouse.*"))`, а в Dashboard їх видно в *Metrics → <сервіс> → cache.hits*. Попадання й промахи логуються на рівні Debug (`Cache hit {CacheKey} {CacheLevel}`), інвалідації — на рівні Information.
+
+Модульні тести кешу: `Services/Catalog/Catalog.Tests/TwoLevelCacheTests.cs`. Вони покривають заповнення L1/L2, підтягування L2 → L1, інвалідацію, fallback при збої Redis і те, що винятки не кешуються.
+
+### 15.5 Перевірка (curl через Gateway)
+
+```bash
+GW=http://localhost:5000
+
+# 1) Кеш каталогу: перший запит іде в SQL, другий — з L1 (у трейсі другого запиту немає SQL-спану)
+curl -s -o /dev/null -w "%{time_total}s\n" "$GW/api/items/2"
+curl -s -o /dev/null -w "%{time_total}s\n" "$GW/api/items/2"
+
+# 2) Інвалідація: PUT, і наступний GET одразу повертає свіжі дані
+curl -s -i -X PUT "$GW/api/items/2" -H "Content-Type: application/json" \
+  -d '{"categoryId":3,"title":"Penny Black, 1840, Great Britain (re-graded)","slug":"penny-black-1840-great-britain","estimateLow":350,"estimateHigh":650}'
+curl -s "$GW/api/items/2"            # title уже новий; у логах catalog-api: Cache invalidated catalog:item:2, reason item updated
+
+# 3) Aggregator: gRPC проти HTTP (noCache=true, щоб міряти саме виклики сервісів)
+for i in 1 2 3; do curl -s -o /dev/null -w "grpc %{time_total}s\n" "$GW/api/aggregator/auctions/1/full?transport=grpc&noCache=true"; done
+for i in 1 2 3; do curl -s -o /dev/null -w "http %{time_total}s\n" "$GW/api/aggregator/auctions/1/full?transport=http&noCache=true"; done
+
+# 4) Кеш картки: другий запит протягом 30 с — X-Aggregator-Cache: hit, жодного виклику сервісів у трейсі
+curl -s -D - -o /dev/null "$GW/api/aggregator/auctions/1/full" | grep -i x-aggregator
+curl -s -D - -o /dev/null "$GW/api/aggregator/auctions/1/full" | grep -i x-aggregator
+```
+
+Для порівняння gRPC і HTTP у Dashboard відкрийте *Traces* і порівняйте тривалість спанів `BuildAuctionCard` з тегом `card.transport = grpc` і `= http`. Перший запит кожного виду пропустіть, бо це прогрів.
+
+**Сценарії відмов:**
+- **Зупинити `redis`** у Dashboard (*Stop*). Запити до `/api/items/2` і до агрегатора продовжують працювати з БД. У логах з'являється `Redis (L2) get failed … Falling back to database`, health сервісів стає *Unhealthy* (перевірка Redis), але відповіді йдуть. Після *Start* кеш підхоплюється сам.
+- **Зупинити `catalog-api`.** `GET $GW/api/aggregator/auctions/1/full?noCache=true` повертає 200 без `lot` і з `"warnings": ["catalog service is unavailable"]`, у логах агрегатора — `catalog is unavailable … RpcException Unavailable`.
+
+**Що показати в Dashboard:**
+1. Трейс другого `GET /api/items/2` без SQL-спану.
+2. Трейс `GET /api/aggregator/auctions/1/full?noCache=true` зі спанами gRPC (`auctions.AuctionsService/GetAuction`, потім паралельно `catalog.CatalogService/GetItem`, `community.CommunityService/GetOpinionsForItem`, `auctions.AuctionsService/GetBids`).
+3. Метрику `cache.hits` (*Metrics → catalog-api → cache.hits*, розбивка за `cache.level`).
+
+### 15.6 Відповідність критеріям прийому (Лаба 6)
+
+| № | Критерій | Де виконано |
+|---|---|---|
+| 1 | Redis в AppHost, посилання з сервісів і агрегатора | `Platform.AppHost/AppHost.cs` (`AddRedis("redis").WithDataVolume()`, `WithReference(redis).WaitFor(redis)` для auctions-api, catalog-api, community-api, aggregator), `Platform.AppHost.csproj` (`Aspire.Hosting.Redis`) |
+| 2 | Protobuf у csproj і пакети | `Auctions.Api.csproj`, `Catalog.Api.csproj`, `Community.WebApi.csproj` (`GrpcServices="Server"`, Grpc.AspNetCore, Microsoft.Extensions.Caching.Memory, Aspire.StackExchange.Redis.DistributedCaching); `Platform.Aggregator.csproj` (`GrpcServices="Client"`, Grpc.Net.ClientFactory, Google.Protobuf, Grpc.Tools) |
+| 3 | IMemoryCache з SizeLimit, Size і обидва expiration | `Program.cs` сервісів (`AddMemoryCache(o => o.SizeLimit = 1024)`), `*/Caching/TwoLevelCache.cs` (`SetL1`) |
+| 4 | Cache-aside з передбачуваними ключами й логом hit/miss | `Catalog.Bll/Caching/`, `Auctions.Bll/Caching/`, `Community.Application/Caching/` (`Cached*Service`, `CachingBehavior`, `*CacheKeys.cs`) |
+| 5 | Синхронна інвалідація після записів | `Cached*Service.cs`, `Community.Application/Commands/ExpertOpinions/*/…Handler.cs` |
+| 6 | IDistributedCache на Redis, JSON, префікси, TTL за типом | `Program.cs` сервісів і агрегатора (`AddRedisDistributedCache("redis")`), `TwoLevelCache.cs`, `*CacheKeys.cs`, `Platform.Aggregator/Caching/` |
+| 7 | Дворівневий кеш L1 → L2 → БД, fallback при збої Redis | `*/Caching/TwoLevelCache.cs`, `Catalog.Tests/TwoLevelCacheTests.cs` |
+| 8 | Контракти `.proto` | `*/Protos/auctions.proto`, `catalog.proto`, `community.proto` |
+| 9 | gRPC-сервіси, статуси, interceptor, HTTP/2 | `Auctions.Api/Grpc/`, `Catalog.Api/Grpc/`, `Community.WebApi/Grpc/`, `Program.cs` (`AddGrpc`, `MapGrpcService`), `appsettings.json` (`Kestrel:Endpoints` http + grpc) |
+| 10 | gRPC-клієнти з логічними адресами | `Platform.Aggregator/Program.cs` (`AddGrpcClient` з `http://_grpc.<ресурс>`) |
+| 11 | Агрегація через gRPC з паралельністю й обробкою RpcException | `Platform.Aggregator/Services/AuctionCardService.cs`, `Clients/GrpcCardDataSource.cs`, `Clients/HttpCardDataSource.cs`, `Controllers/AuctionCardsController.cs` (`?transport=`) |
+| 12 | Кеш агрегованої відповіді в Redis | `Platform.Aggregator/Caching/AuctionCardCache.cs`, `AggregatorCacheKeys.cs` |
+| 13 | Серверний interceptor | `Platform.ServiceDefaults/GrpcLoggingInterceptor.cs` |
+| 14 | Метрики кешу | `*/Caching/CacheMetrics.cs`, `Platform.Aggregator/Caching/CacheMetrics.cs`, `Platform.ServiceDefaults/Extensions.cs` (`AddMeter("AuctionHouse.*")`) |

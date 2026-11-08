@@ -1,7 +1,11 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Http.Resilience;
+using Auctions.Grpc;
+using Catalog.Grpc;
+using Community.Grpc;
 using Microsoft.OpenApi.Models;
+using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.Services;
 using Platform.ServiceDefaults;
@@ -18,6 +22,27 @@ var aggregatorOptions = builder.Configuration.GetSection(AggregatorOptions.Secti
 builder.Services.AddHttpClient<AuctionsClient>(client => client.BaseAddress = new("https+http://auctions-api"));
 builder.Services.AddHttpClient<CatalogClient>(client => client.BaseAddress = new("https+http://catalog-api"));
 builder.Services.AddHttpClient<CommunityClient>(client => client.BaseAddress = new("https+http://community-api"));
+
+// gRPC-клієнти: логічні адреси "http://_grpc.<ресурс>" — ендпоінт "grpc" (HTTP/2 без TLS) кожного сервісу,
+// який розв'язує service discovery. Resilience, service discovery і CorrelationIdHandler застосовуються
+// з ConfigureHttpClientDefaults (ServiceDefaults), тож X-Correlation-Id потрапляє в gRPC metadata.
+builder.Services.AddGrpcClient<AuctionsService.AuctionsServiceClient>(o => o.Address = new Uri("http://_grpc.auctions-api"));
+builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"));
+builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"));
+
+builder.Services.AddScoped<GrpcCardDataSource>();
+builder.Services.AddScoped<HttpCardDataSource>();
+
+// Кеш готової картки: Redis (IDistributedCache), рядок підключення "redis" від Aspire або з appsettings.json.
+// Короткі таймаути: якщо Redis недоступний, сервіс швидко переходить на БД, а не чекає по 5 с.
+builder.AddRedisDistributedCache("redis", configureOptions: redis =>
+{
+    redis.ConnectTimeout = 2000;
+    redis.AsyncTimeout = 1000;
+    redis.SyncTimeout = 1000;
+});
+builder.Services.AddSingleton<CacheMetrics>();
+builder.Services.AddSingleton<AuctionCardCache>();
 
 // Стандартний resilience-хендлер із ServiceDefaults, але з короткими таймаутами й однією повторною спробою:
 // недоступний сервіс має швидко перетворитися на попередження, а не тримати запит ~30 с.

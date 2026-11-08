@@ -1,0 +1,58 @@
+// Контракт gRPC сервісу каталогу (Проєкт №2). Використовується Platform.Aggregator для картки аукціону.
+syntax = "proto3";
+
+package catalog;
+
+option csharp_namespace = "Catalog.Grpc";
+
+// Читання лотів каталогу для внутрішніх споживачів платформи.
+service CatalogService {
+  // Картка лота за ідентифікатором. NOT_FOUND — лота немає, INVALID_ARGUMENT — id <= 0.
+  rpc GetItem (GetItemRequest) returns (ItemReply);
+
+  // Пакетне читання лотів (до 100 id). Відсутні id повертаються в missing_ids, а не помилкою.
+  rpc GetItemsByIds (GetItemsByIdsRequest) returns (GetItemsByIdsReply);
+}
+
+message GetItemRequest {
+  int64 id = 1;
+}
+
+message GetItemsByIdsRequest {
+  repeated int64 ids = 1;
+}
+
+message GetItemsByIdsReply {
+  repeated ItemReply items = 1;
+  repeated int64 missing_ids = 2;
+}
+
+// Лот каталогу. Грошові суми — десятковий рядок в інваріантній культурі ("8000.00"), щоб не втрачати точність decimal.
+message ItemReply {
+  int64 id = 1;
+  string sku = 2;
+  string title = 3;
+  string category_name = 4;
+  string estimate_low = 5;
+  string estimate_high = 6;
+  // ISO 4217, напр. "USD".
+  string currency = 7;
+  // Draft | Listed | InAuction | Sold | Withdrawn.
+  string status = 8;
+  // Відсутній, якщо в лота немає детального опису.
+  ItemDetail detail = 9;
+  repeated ItemImage images = 10;
+}
+
+message ItemDetail {
+  string condition = 1;
+  optional int32 production_year = 2;
+  optional string country_of_origin = 3;
+  optional string provenance = 4;
+  optional string description = 5;
+}
+
+message ItemImage {
+  string url = 1;
+  bool is_primary = 2;
+}

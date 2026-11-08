@@ -10,6 +10,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
 
+    <PackageReference Include="Grpc.Core.Api" Version="2.85.0" />
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="10.0.0" />
     <!-- Та сама версія драйвера, що й у Community.Infrastructure (3.0.0 з транзитивних залежностей має вразливі пакети). -->

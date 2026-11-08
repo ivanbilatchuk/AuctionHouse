@@ -1,0 +1,59 @@
+// Контракт gRPC сервісу аукціонів (Проєкт №1). Використовується Platform.Aggregator для картки аукціону.
+syntax = "proto3";
+
+package auctions;
+
+option csharp_namespace = "Auctions.Grpc";
+
+import "google/protobuf/timestamp.proto";
+
+// Читання аукціонів і ставок для внутрішніх споживачів платформи.
+service AuctionsService {
+  // Аукціон з умовами торгів. NOT_FOUND — аукціону немає, INVALID_ARGUMENT — id <= 0.
+  rpc GetAuction (GetAuctionRequest) returns (AuctionReply);
+
+  // Ставки аукціону від найновішої; limit = 0 — усі ставки (максимум 100).
+  rpc GetBids (GetBidsRequest) returns (GetBidsReply);
+}
+
+message GetAuctionRequest {
+  int64 id = 1;
+}
+
+// Грошові суми й відсотки — десятковий рядок в інваріантній культурі ("6250.00"), щоб не втрачати точність decimal.
+message AuctionReply {
+  int64 auction_id = 1;
+  int64 item_id = 2;
+  string item_title = 3;
+  // Draft | Scheduled | Active | Closed | Settled | Unsold | Cancelled.
+  string status = 4;
+  google.protobuf.Timestamp starts_at = 5;
+  google.protobuf.Timestamp ends_at = 6;
+  string starting_price = 7;
+  string current_price = 8;
+  int32 bid_count = 9;
+  optional int64 leading_bidder_id = 10;
+  optional string reserve_price = 11;
+  string bid_increment = 12;
+  string buyer_premium_percent = 13;
+}
+
+message GetBidsRequest {
+  int64 auction_id = 1;
+  // 0 — без обмеження.
+  int32 limit = 2;
+}
+
+message GetBidsReply {
+  repeated BidReply bids = 1;
+  // Загальна кількість ставок аукціону (до застосування limit).
+  int32 total_count = 2;
+}
+
+message BidReply {
+  int64 bid_id = 1;
+  int64 bidder_id = 2;
+  string amount = 3;
+  google.protobuf.Timestamp placed_at = 4;
+  bool is_winning = 5;
+}

@@ -1,0 +1,40 @@
+// Контракт gRPC сервісу спільноти (Проєкт №3). Використовується Platform.Aggregator для картки аукціону.
+syntax = "proto3";
+
+package community;
+
+option csharp_namespace = "Community.Grpc";
+
+import "google/protobuf/timestamp.proto";
+
+// Читання експертних висновків для внутрішніх споживачів платформи.
+service CommunityService {
+  // Перша сторінка висновків про лот, від найновіших. INVALID_ARGUMENT — item_id <= 0 або page_size поза 0..100.
+  rpc GetOpinionsForItem (GetOpinionsForItemRequest) returns (GetOpinionsForItemReply);
+}
+
+message GetOpinionsForItemRequest {
+  int64 item_id = 1;
+  // 0 — розмір сторінки за замовчуванням (20).
+  int32 page_size = 2;
+}
+
+message GetOpinionsForItemReply {
+  repeated ExpertOpinion opinions = 1;
+  // Загальна кількість висновків про лот (може бути більшою за кількість у відповіді).
+  int64 total_count = 2;
+}
+
+message ExpertOpinion {
+  // ObjectId MongoDB (24 hex-символи).
+  string id = 1;
+  int64 item_id = 2;
+  // Cards | Stamps | Vinyl | Coins.
+  string category_kind = 3;
+  string expert_name = 4;
+  // Authentic | Questionable | Counterfeit.
+  string verdict = 5;
+  // Впевненість експерта, 0..100.
+  int32 confidence = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
