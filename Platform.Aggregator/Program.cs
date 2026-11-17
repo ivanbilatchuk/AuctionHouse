@@ -1,13 +1,15 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
-using Microsoft.Extensions.Http.Resilience;
 using Auctions.Grpc;
 using Catalog.Grpc;
 using Community.Grpc;
 using Microsoft.OpenApi.Models;
 using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
+using Platform.Aggregator.HealthChecks;
+using Platform.Aggregator.Resilience;
 using Platform.Aggregator.Services;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Platform.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,26 +18,44 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 builder.Services.AddOptions<AggregatorOptions>().Bind(builder.Configuration.GetSection(AggregatorOptions.SectionName));
-var aggregatorOptions = builder.Configuration.GetSection(AggregatorOptions.SectionName).Get<AggregatorOptions>() ?? new AggregatorOptions();
+
+// Лаба 7: політики resilience за критичністю сервісу (обґрунтування — README.md, ServiceResilienceProfile):
+//   Auctions, Catalog — критичні (без аукціону/лота картки немає): більше повторів, чутливіший circuit breaker;
+//   Community         — некритичний (висновки експертів): швидко здатися й повернути часткову картку.
+var critical = ServiceResilienceProfile.Critical;
+var nonCritical = ServiceResilienceProfile.NonCritical;
 
 // Типізовані клієнти; "https+http://" — спершу https-ендпоінт ресурсу, інакше http.
-builder.Services.AddHttpClient<AuctionsClient>(client => client.BaseAddress = new("https+http://auctions-api"));
-builder.Services.AddHttpClient<CatalogClient>(client => client.BaseAddress = new("https+http://catalog-api"));
-builder.Services.AddHttpClient<CommunityClient>(client => client.BaseAddress = new("https+http://community-api"));
+// Стандартний обробник із ServiceDefaults прибирається (RemoveAllResilienceHandlers) і замінюється власним — без нашарування.
+builder.Services.AddHttpClient<AuctionsClient>(client => client.BaseAddress = new("https+http://auctions-api"))
+    .AddServiceResilience(critical);
+builder.Services.AddHttpClient<CatalogClient>(client => client.BaseAddress = new("https+http://catalog-api"))
+    .AddServiceResilience(critical);
+builder.Services.AddHttpClient<CommunityClient>(client => client.BaseAddress = new("https+http://community-api"))
+    .AddServiceResilience(nonCritical);
 
 // gRPC-клієнти: логічні адреси "http://_grpc.<ресурс>" — ендпоінт "grpc" (HTTP/2 без TLS) кожного сервісу,
 // який розв'язує service discovery. Resilience, service discovery і CorrelationIdHandler застосовуються
 // з ConfigureHttpClientDefaults (ServiceDefaults), тож X-Correlation-Id потрапляє в gRPC metadata.
-builder.Services.AddGrpcClient<AuctionsService.AuctionsServiceClient>(o => o.Address = new Uri("http://_grpc.auctions-api"));
-builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"));
-builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"));
+// Два рівні без дублювання повторів: HTTP-обробник (таймаути, circuit breaker; retry вимкнено, бо gRPC — це POST)
+// і retry-політика gRPC-каналу за статусами Unavailable / ResourceExhausted.
+builder.Services.AddGrpcClient<AuctionsService.AuctionsServiceClient>(o => o.Address = new Uri("http://_grpc.auctions-api"))
+    .AddServiceResilience(critical)
+    .AddGrpcRetryPolicy(critical);
+builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"))
+    .AddServiceResilience(critical)
+    .AddGrpcRetryPolicy(critical);
+builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"))
+    .AddServiceResilience(nonCritical)
+    .AddGrpcRetryPolicy(nonCritical);
 
 builder.Services.AddScoped<GrpcCardDataSource>();
 builder.Services.AddScoped<HttpCardDataSource>();
 
 // Кеш готової картки: Redis (IDistributedCache), рядок підключення "redis" від Aspire або з appsettings.json.
 // Короткі таймаути: якщо Redis недоступний, сервіс швидко переходить на БД, а не чекає по 5 с.
-builder.AddRedisDistributedCache("redis", configureOptions: redis =>
+// Власний health check Redis зі статусом Degraded (нижче) замінює вбудований Unhealthy-check Aspire.
+builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true, redis =>
 {
     redis.ConnectTimeout = 2000;
     redis.AsyncTimeout = 1000;
@@ -44,16 +64,20 @@ builder.AddRedisDistributedCache("redis", configureOptions: redis =>
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<AuctionCardCache>();
 
-// Стандартний resilience-хендлер із ServiceDefaults, але з короткими таймаутами й однією повторною спробою:
-// недоступний сервіс має швидко перетворитися на попередження, а не тримати запит ~30 с.
-builder.Services.ConfigureAll<HttpStandardResilienceOptions>(resilience =>
-{
-    resilience.AttemptTimeout.Timeout = TimeSpan.FromSeconds(aggregatorOptions.AttemptTimeoutSeconds);
-    resilience.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(aggregatorOptions.TotalTimeoutSeconds);
-    resilience.Retry.MaxRetryAttempts = 1;
-    resilience.Retry.Delay = TimeSpan.FromMilliseconds(200);
-    resilience.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(Math.Max(10, aggregatorOptions.AttemptTimeoutSeconds * 2));
-});
+// Лаба 7: readiness Aggregator-а — стан gRPC-залежностей (gRPC Health Checking Protocol) і Redis.
+// Недоступність критичного сервісу => Unhealthy; некритичного (Community) і кешу => Degraded:
+// Aggregator і далі віддає картку, лише без висновків експертів / без кешу.
+builder.Services.AddHealthChecks()
+    .AddGrpcServiceHealthCheck("auctions-api", new Uri("http://_grpc.auctions-api"), HealthStatus.Unhealthy)
+    .AddGrpcServiceHealthCheck("catalog-api", new Uri("http://_grpc.catalog-api"), HealthStatus.Unhealthy)
+    .AddGrpcServiceHealthCheck("community-api", new Uri("http://_grpc.community-api"), HealthStatus.Degraded)
+    .AddRedis(
+        redisConnectionString: builder.Configuration.GetConnectionString("redis")
+            ?? throw new InvalidOperationException("Connection string 'redis' is not configured."),
+        name: "redis-cache",
+        failureStatus: HealthStatus.Degraded,
+        tags: ["cache", "redis", "ready"],
+        timeout: TimeSpan.FromSeconds(3));
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<AuctionCardService>();

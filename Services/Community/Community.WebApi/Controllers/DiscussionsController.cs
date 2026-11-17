@@ -4,6 +4,7 @@ using Community.Application.Commands.Discussions.CreateDiscussion;
 using Community.Application.DTO;
 using Community.Application.Queries.Discussions.GetDiscussionById;
 using Community.WebApi.Contracts;
+using Community.WebApi.Metrics;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,7 +14,7 @@ namespace Community.WebApi.Controllers;
 [ApiController]
 [Route("api/discussions")]
 [Produces("application/json")]
-public sealed class DiscussionsController(ISender sender, IMapper mapper) : ControllerBase
+public sealed class DiscussionsController(ISender sender, IMapper mapper, CommunityMetrics metrics) : ControllerBase
 {
     /// <summary>Обговорення з усіма коментарями й відповідями (один документ).</summary>
     [HttpGet("{id}")]
@@ -30,7 +31,9 @@ public sealed class DiscussionsController(ISender sender, IMapper mapper) : Cont
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<DiscussionDto>> Create(CreateDiscussionRequest request, CancellationToken ct)
     {
-        var created = await sender.Send(mapper.Map<CreateDiscussionCommand>(request), ct);
+        var created = await metrics.MeasureAsync("create_discussion",
+            () => sender.Send(mapper.Map<CreateDiscussionCommand>(request), ct));
+        metrics.DiscussionCreated();
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -42,7 +45,9 @@ public sealed class DiscussionsController(ISender sender, IMapper mapper) : Cont
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<CommentDto>> AddComment(string id, AddCommentRequest request, CancellationToken ct)
     {
-        var comment = await sender.Send(mapper.Map<AddCommentCommand>(request) with { DiscussionId = id }, ct);
+        var comment = await metrics.MeasureAsync("add_comment",
+            () => sender.Send(mapper.Map<AddCommentCommand>(request) with { DiscussionId = id }, ct));
+        metrics.CommentAdded();
         return CreatedAtAction(nameof(GetById), new { id }, comment);
     }
 }

@@ -9,6 +9,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Platform.ServiceDefaults;
+using Platform.ServiceDefaults.HealthChecks;
 using Serilog;
 using Serilog.Events;
 using Serilog.Formatting.Compact;
@@ -21,11 +22,18 @@ public static class Extensions
 {
     private const string HealthEndpointPath = "/health";
     private const string AlivenessEndpointPath = "/alive";
+    public const string LivenessEndpointPath = "/health/live";
+    public const string ReadinessEndpointPath = "/health/ready";
 
     // Префікс ActivitySource-ів із бізнес-спанами (AuctionHouse.Auctions, AuctionHouse.Catalog, ...).
     public const string ActivitySourcePrefix = "AuctionHouse.";
     public const string MongoDbActivitySource = "MongoDB.Driver.Core.Extensions.DiagnosticSources";
     public const string SamplingRatioKey = "OpenTelemetry:SamplingRatio";
+
+    // Лаба 7: Meter-и бізнес-метрик (назва Meter = назва сервісу, класи в <Сервіс>.Api/Metrics/)
+    // і Meter "Polly" — події resilience (resilience.polly.strategy.events: OnRetry, OnCircuitOpened, ...).
+    public static readonly string[] BusinessMeters = ["Auctions.Api", "Catalog.Api", "Community.WebApi", "Platform.Aggregator"];
+    public const string PollyMeter = "Polly";
 
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
@@ -99,6 +107,8 @@ public static class Extensions
             .WithMetrics(metrics => metrics
                 // Власні лічильники кешу: AuctionHouse.Catalog.Cache, AuctionHouse.Auctions.Cache, ... (cache.hits / cache.misses).
                 .AddMeter(ActivitySourcePrefix + "*")
+                .AddMeter(BusinessMeters)
+                .AddMeter(PollyMeter)
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation())
@@ -143,19 +153,41 @@ public static class Extensions
 
     public static TBuilder AddDefaultHealthChecks<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        // "self" — єдина liveness-перевірка: процес живий і відповідає. Залежності (БД, Redis, gRPC)
+        // реєструють сервіси з тегом "ready" у своїх <Сервіс>.Api/HealthChecks/.
         builder.Services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+            .AddCheck("self", () => HealthCheckResult.Healthy(), [HealthTags.Live]);
 
         return builder;
     }
 
-    // /health — усі перевірки (готовність, у т. ч. БД), /alive — лише "live" (процес відповідає).
+    // Endpoints публікуються в усіх середовищах (не лише Development): їх використовують Aspire (WithHttpHealthCheck)
+    // і Kubernetes (Лаб. 10). Відповідь не містить секретів — лише назви, статуси й повідомлення перевірок.
+    //   /health/live  — liveness: лише "live" (без зовнішніх залежностей), збій => перезапуск процесу;
+    //   /health/ready — readiness: перевірки з тегом "ready" (БД, Redis, gRPC-залежності), збій => без трафіку;
+    //   /health       — усі перевірки з деталями (зручно для діагностики);
+    //   /alive        — аліас liveness із шаблону Aspire.
+    // Degraded (наприклад, недоступний Redis) відповідає 200: сервіс працює, хоч і без кешу.
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        app.MapHealthChecks(HealthEndpointPath);
-        app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions
+        var liveOptions = new HealthCheckOptions
         {
-            Predicate = registration => registration.Tags.Contains("live")
+            Predicate = registration => registration.Tags.Contains(HealthTags.Live),
+            ResponseWriter = HealthCheckResponseWriter.WriteJsonAsync
+        };
+
+        app.MapHealthChecks(LivenessEndpointPath, liveOptions);
+        app.MapHealthChecks(AlivenessEndpointPath, liveOptions);
+
+        app.MapHealthChecks(ReadinessEndpointPath, new HealthCheckOptions
+        {
+            Predicate = registration => registration.Tags.Contains(HealthTags.Ready),
+            ResponseWriter = HealthCheckResponseWriter.WriteJsonAsync
+        });
+
+        app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions
+        {
+            ResponseWriter = HealthCheckResponseWriter.WriteJsonAsync
         });
 
         return app;

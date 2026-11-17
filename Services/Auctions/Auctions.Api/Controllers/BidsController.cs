@@ -1,3 +1,4 @@
+using Auctions.Api.Metrics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -11,10 +12,12 @@ namespace Auctions.Api.Controllers;
 public class BidsController : ControllerBase
 {
     private readonly IBidService _bidService;
+    private readonly AuctionsMetrics _metrics;
 
-    public BidsController(IBidService bidService)
+    public BidsController(IBidService bidService, AuctionsMetrics metrics)
     {
         _bidService = bidService;
+        _metrics = metrics;
     }
 
     /// <summary>Усі ставки аукціону від найвищої до найнижчої.</summary>
@@ -39,7 +42,9 @@ public class BidsController : ControllerBase
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<BidDto>> PlaceBid(long auctionId, PlaceBidDto dto, CancellationToken cancellationToken)
     {
-        var bid = await _bidService.PlaceBidAsync(auctionId, dto, cancellationToken);
+        var bid = await _metrics.MeasureAsync("place_bid",
+            () => _bidService.PlaceBidAsync(auctionId, dto, cancellationToken));
+        _metrics.BidPlaced(bid.IsWinning, bid.Amount);
         return CreatedAtAction(nameof(GetById), new { auctionId, bidId = bid.BidId }, bid);
     }
 }

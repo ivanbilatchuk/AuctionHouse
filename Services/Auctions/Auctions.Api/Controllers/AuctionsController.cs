@@ -1,3 +1,4 @@
+using Auctions.Api.Metrics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -11,10 +12,12 @@ namespace Auctions.Api.Controllers;
 public class AuctionsController : ControllerBase
 {
     private readonly IAuctionService _auctionService;
+    private readonly AuctionsMetrics _metrics;
 
-    public AuctionsController(IAuctionService auctionService)
+    public AuctionsController(IAuctionService auctionService, AuctionsMetrics metrics)
     {
         _auctionService = auctionService;
+        _metrics = metrics;
     }
 
     /// <summary>Список аукціонів (необов'язковий фільтр за статусом).</summary>
@@ -40,7 +43,9 @@ public class AuctionsController : ControllerBase
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<AuctionDto>> Create(CreateAuctionDto dto, CancellationToken cancellationToken)
     {
-        var created = await _auctionService.CreateAsync(dto, cancellationToken);
+        var created = await _metrics.MeasureAsync("create_auction",
+            () => _auctionService.CreateAsync(dto, cancellationToken));
+        _metrics.AuctionCreated(created.Status);
         return CreatedAtAction(nameof(GetById), new { id = created.AuctionId }, created);
     }
 
@@ -62,8 +67,13 @@ public class AuctionsController : ControllerBase
     public async Task<ActionResult<AuctionDto>> ChangeStatus(
         long id,
         ChangeAuctionStatusDto dto,
-        CancellationToken cancellationToken) =>
-        Ok(await _auctionService.ChangeStatusAsync(id, dto, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var changed = await _metrics.MeasureAsync("change_status",
+            () => _auctionService.ChangeStatusAsync(id, dto, cancellationToken));
+        _metrics.AuctionStatusChanged(changed.Status);
+        return Ok(changed);
+    }
 
     /// <summary>М'яко видаляє аукціон (лише Draft/Cancelled без ставок).</summary>
     [HttpDelete("{id:long}")]

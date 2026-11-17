@@ -1,6 +1,8 @@
 using System.Reflection;
 using Catalog.Api.ExceptionHandling;
 using Catalog.Api.Grpc;
+using Catalog.Api.HealthChecks;
+using Catalog.Api.Metrics;
 using Catalog.Bll.Caching;
 using Catalog.Bll.Mapping;
 using Catalog.Bll.Services;
@@ -14,6 +16,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.OpenApi.Models;
 using Platform.ServiceDefaults;
+using Platform.ServiceDefaults.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -46,7 +49,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 // L2 — Redis через IDistributedCache (рядок підключення "redis" від Aspire або з appsettings.json).
 builder.Services.AddMemoryCache(options => options.SizeLimit = 1024);
 // Короткі таймаути: якщо Redis недоступний, сервіс швидко переходить на БД, а не чекає по 5 с.
-builder.AddRedisDistributedCache("redis", configureOptions: redis =>
+// Власний health check Redis зі статусом Degraded (HealthChecks/) замінює вбудований Unhealthy-check Aspire.
+builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true, redis =>
 {
     redis.ConnectTimeout = 2000;
     redis.AsyncTimeout = 1000;
@@ -57,6 +61,13 @@ builder.Services.AddScoped<ITagService, TagService>();
 
 // gRPC для внутрішніх викликів (Aggregator); логування кожного виклику — GrpcLoggingInterceptor із ServiceDefaults.
 builder.Services.AddGrpc(options => options.Interceptors.Add<GrpcLoggingInterceptor>());
+// Стандартний gRPC Health Checking Protocol (grpc.health.v1.Health): статус "" обчислюється з тих самих
+// ASP.NET Core health checks, що й /health/ready (тег "ready"). Його викликає health check Aggregator-а.
+builder.Services.AddGrpcHealthChecks(options =>
+{
+    options.Services.Clear();
+    options.Services.Map("", context => context.Tags.Contains(HealthTags.Ready));
+});
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -78,7 +89,11 @@ builder.Services.AddProblemDetails(options =>
         context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-builder.Services.AddHealthChecks().AddDbContextCheck<CatalogDbContext>();
+// Лаба 7: health checks SQL Server (Unhealthy) і Redis (Degraded) з тегом "ready" — /health/ready.
+builder.Services.AddCatalogHealthChecks(builder.Configuration);
+
+// Лаба 7: бізнес-метрики (Meter "Catalog.Api"), Singleton.
+builder.Services.AddSingleton<CatalogMetrics>();
 
 var app = builder.Build();
 
@@ -104,5 +119,6 @@ app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 app.MapDefaultEndpoints();
 app.MapControllers();
 app.MapGrpcService<CatalogGrpcService>();
+app.MapGrpcHealthChecksService();
 
 await app.RunAsync();
