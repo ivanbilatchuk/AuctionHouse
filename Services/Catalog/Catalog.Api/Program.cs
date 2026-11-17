@@ -2,8 +2,10 @@ using System.Reflection;
 using Catalog.Api.ExceptionHandling;
 using Catalog.Api.Grpc;
 using Catalog.Api.HealthChecks;
+using Catalog.Api.IntegrationEvents;
 using Catalog.Api.Metrics;
 using Catalog.Bll.Caching;
+using Catalog.Bll.IntegrationEvents;
 using Catalog.Bll.Mapping;
 using Catalog.Bll.Services;
 using Catalog.Bll.Validation;
@@ -15,6 +17,7 @@ using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.OpenApi.Models;
+using Platform.EventBus;
 using Platform.ServiceDefaults;
 using Platform.ServiceDefaults.HealthChecks;
 
@@ -94,6 +97,14 @@ builder.Services.AddCatalogHealthChecks(builder.Configuration);
 
 // Лаба 7: бізнес-метрики (Meter "Catalog.Api"), Singleton.
 builder.Services.AddSingleton<CatalogMetrics>();
+
+// Лаба 8: RabbitMQ через Aspire.RabbitMQ.Client (рядок підключення "messaging" від Aspire), IEventPublisher,
+// health check брокера (тег "ready", Degraded). Каталог — власник даних предмета: публікує ItemUpdated у catalog-events
+// після успішного збереження (ItemService -> ICatalogIntegrationEventService), а як споживач проєктує статус
+// аукціону на Item.Status (AuctionEventsConsumer: черга catalog.auctions-sync).
+builder.AddEventBus();
+builder.Services.AddScoped<ICatalogIntegrationEventService, CatalogIntegrationEventService>();
+builder.Services.AddHostedService<AuctionEventsConsumer>();
 
 var app = builder.Build();
 

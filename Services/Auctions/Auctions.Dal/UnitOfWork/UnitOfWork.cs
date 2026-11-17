@@ -17,6 +17,7 @@ public sealed class UnitOfWork : IUnitOfWork, IDbSession
     private IAuctionRepository? _auctions;
     private IBidderRepository? _bidders;
     private IBidRepository? _bids;
+    private IProcessedEventRepository? _processedEvents;
 
     public UnitOfWork(string connectionString, ILogger<UnitOfWork> logger)
     {
@@ -40,6 +41,8 @@ public sealed class UnitOfWork : IUnitOfWork, IDbSession
     public IBidderRepository Bidders => _bidders ??= new BidderRepository(this);
 
     public IBidRepository Bids => _bids ??= new BidRepository(this);
+
+    public IProcessedEventRepository ProcessedEvents => _processedEvents ??= new ProcessedEventRepository(this);
 
     public async ValueTask<SqlConnection> GetOpenConnectionAsync(CancellationToken cancellationToken = default)
     {

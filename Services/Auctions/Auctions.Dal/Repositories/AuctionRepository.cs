@@ -198,7 +198,7 @@ public sealed class AuctionRepository : BaseDapperRepository<Auction>, IAuctionR
             new { AuctionId = auctionId, Amount = amount, BidderId = bidderId, EndsAt = endsAt, Actor = AuditActor },
             cancellationToken: cancellationToken);
 
-    public async Task<string> ChangeStatusAsync(long auctionId, string newStatus, string? reason, CancellationToken cancellationToken = default)
+    public async Task<AuctionStatusChange> ChangeStatusAsync(long auctionId, string newStatus, string? reason, CancellationToken cancellationToken = default)
     {
         var result = await QuerySingleOrDefaultAsync<StatusChangeRow>(
             "dbo.sp_ChangeAuctionStatus",
@@ -206,8 +206,25 @@ public sealed class AuctionRepository : BaseDapperRepository<Auction>, IAuctionR
             CommandType.StoredProcedure,
             cancellationToken);
 
-        return result?.NewStatus ?? newStatus;
+        return new AuctionStatusChange(result?.OldStatus, result?.NewStatus ?? newStatus);
     }
+
+    private const string UpdateItemTitleSql = """
+        UPDATE dbo.Auction
+        SET    ItemTitle = @ItemTitle,
+               ItemTitleSyncedAt = @ChangedAt,
+               UpdatedAt = SYSUTCDATETIME(),
+               UpdatedBy = @Actor
+        OUTPUT inserted.AuctionId
+        WHERE  ItemId = @ItemId
+          AND  IsDeleted = 0
+          AND  (ItemTitleSyncedAt IS NULL OR ItemTitleSyncedAt < @ChangedAt);
+        """;
+
+    public Task<IReadOnlyList<long>> UpdateItemTitleAsync(long itemId, string itemTitle, DateTime changedAt, CancellationToken cancellationToken = default) =>
+        QueryAsync<long>(UpdateItemTitleSql,
+            new { ItemId = itemId, ItemTitle = itemTitle, ChangedAt = changedAt, Actor = AuditActor },
+            cancellationToken: cancellationToken);
 
     private sealed class StatusChangeRow
     {

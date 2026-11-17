@@ -17,10 +17,34 @@ namespace Catalog.Dal.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.13")
+                .HasAnnotation("ProductVersion", "10.0.15")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
+
+            modelBuilder.Entity("Catalog.Dal.Entities.ProcessedEvent", b =>
+                {
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("ProcessedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime2(3)")
+                        .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                    b.HasKey("EventId")
+                        .HasName("PK_ProcessedEvents");
+
+                    b.HasIndex("ProcessedAt")
+                        .HasDatabaseName("IX_ProcessedEvents_ProcessedAt");
+
+                    b.ToTable("ProcessedEvents", "dbo");
+                });
 
             modelBuilder.Entity("Catalog.Domain.Entities.Category", b =>
                 {
@@ -167,6 +191,9 @@ namespace Catalog.Dal.Migrations
                         .HasColumnName("ItemId");
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTime?>("AuctionStatusSyncedAt")
+                        .HasColumnType("datetime2(3)");
 
                     b.Property<long>("CategoryId")
                         .HasColumnType("bigint");

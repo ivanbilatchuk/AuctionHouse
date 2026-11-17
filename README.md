@@ -26,10 +26,11 @@ AuctionHouse/
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
 ├── Platform.slnx                одне рішення на всю платформу
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Redis + 3 сервіси + Aggregator + API Gateway
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Redis + RabbitMQ + 3 сервіси + Aggregator + API Gateway
 ├── Platform.ServiceDefaults/    спільні Serilog, OpenTelemetry, health checks, service discovery, CorrelationId (Лаба 5)
 ├── Platform.ApiGateway/         YARP: єдина точка входу http://localhost:5000 (Лаба 5)
 ├── Platform.Aggregator/         композитна картка аукціону з трьох сервісів (Лаба 5)
+├── Platform.EventBus/           RabbitMQ: підключення, топологія, publisher, consumer, retry/DLQ, трасування (Лаба 8)
 └── Services/
     ├── Auctions/                Проєкт №1 — ADO.NET + Dapper (Лаба 2)
     ├── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
@@ -91,6 +92,7 @@ curl -s -i "$GW/api/aggregator/auctions/1/full?transport=http&noCache=true"   # 
 14. [Лабораторна 5 — мікросервісна платформа на .NET Aspire](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire)
 15. [Лабораторна 6 — gRPC і дворівневе кешування](#15-лабораторна-6--grpc-і-дворівневе-кешування)
 16. [Лабораторна 7 — Resilience (Polly), бізнес-метрики та Health Checks](#16-лабораторна-7--resilience-polly-бізнес-метрики-та-health-checks)
+17. [Лабораторна 8 — Подієва архітектура з RabbitMQ](#17-лабораторна-8--подієва-архітектура-з-rabbitmq)
 
 ---
 
@@ -1726,3 +1728,122 @@ for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} %{time_total}s\n"
 | 10 | gRPC Health Checking Protocol і перевірка залежностей в Aggregator | `Program.cs` сервісів (`AddGrpcHealthChecks`, `MapGrpcHealthChecksService`), `Platform.Aggregator/HealthChecks/GrpcServiceHealthCheck.cs` |
 | 11 | Розділені liveness і readiness з деталями | `Platform.ServiceDefaults/Extensions.cs` (`/health/live`, `/health/ready`), `Platform.ServiceDefaults/HealthChecks/HealthCheckResponseWriter.cs` |
 | 12 | AppHost показує стан ресурсів через WithHttpHealthCheck | `Platform.AppHost/AppHost.cs` (`WithHttpHealthCheck("/health/ready")` + `WaitFor`) |
+
+
+## 17. Лабораторна 8 — Подієва архітектура з RabbitMQ
+
+Політика дублювання з лаби 1 (§2) реалізована подіями: сервіс-власник публікує integration event, споживачі оновлюють свої копії (eventual consistency).
+
+| Подія (exchange / routing key) | Власник → споживач | Що оновлюється | Політика §2 |
+|---|---|---|---|
+| `ItemUpdatedIntegrationEvent` (`catalog-events` / `item.updated`) | Catalog → Auctions | `dbo.Auction.ItemTitle` усіх аукціонів предмета | №1 |
+| те саме | Catalog → Community | `item.title` в `expertOpinions` і `discussions` | №2 |
+| `AuctionStatusChangedIntegrationEvent` (`auctions-events` / `auction.<статус>`) | Auctions → Catalog | `Item.Status`: Active → InAuction, Closed → Sold, Unsold/Cancelled → Listed | №4 |
+
+Ціни в уже створених аукціонах і ставках події не змінюють, оновлюються лише денормалізовані копії. Видалення предмета подію не публікує: Каталог не дає видалити предмет у торгах, а назва в завершених аукціонах — історичний знімок.
+
+### 17.1 Брокер і підключення
+
+- **AppHost.** `AddRabbitMQ("messaging").WithDataVolume().WithManagementPlugin()`, а сервіси отримують `WithReference(messaging).WaitFor(messaging)`. Management UI відкривається посиланням з Dashboard (ресурс `messaging`). Логін `guest`, пароль — параметр `messaging-password` у Dashboard.
+- **Сервіси.** `builder.AddEventBus()` (`Platform.EventBus/EventBusExtensions.cs`) викликає `AddRabbitMQClient("messaging")` з пакета **Aspire.RabbitMQ.Client** (RabbitMQ.Client **7.1**, асинхронний API `IChannel` / `*Async`). `IConnection` — singleton, канали окремі для публікації та споживання.
+- **Health check** Aspire (`RabbitMQ.Client`) переведено в `/health/ready` з тегом `ready` і статусом **Degraded**. Без брокера сервіс і далі обслуговує HTTP, лише копії тимчасово не синхронізуються.
+
+### 17.2 Топологія (декларативно, під час старту)
+
+`Platform.EventBus/RabbitMq/EventBusTopology.cs`. Publisher оголошує свій exchange, consumer — exchange джерела та свої черги. Повторне оголошення безпечне.
+
+| Об'єкт | Тип | Призначення |
+|---|---|---|
+| `catalog-events`, `auctions-events` | topic, durable | exchange сервісу-власника |
+| `auctions.catalog-sync` ← `item.*` | durable queue | копія назви в Auctions |
+| `community.catalog-sync` ← `item.*` | durable queue | копія назви в Community (та сама подія — fan-out) |
+| `catalog.auctions-sync` ← `auction.active`, `auction.closed`, `auction.unsold`, `auction.cancelled` | durable queue | `auction.scheduled` сюди не потрапляє — фільтрує topic exchange |
+| `catalog-events.dlx`, `auctions-events.dlx` | **direct** | dead letter exchange, routing key = ім'я черги |
+| `<черга>.dlq` | durable queue | «мертві» повідомлення з `x-death` |
+| `<черга>.retry` | durable queue без споживачів | затримка повтору: після `Expiration` RabbitMQ повертає повідомлення в `<черга>` |
+
+DLX має тип **direct**, а не fanout, як у методичці. На `catalog-events` підписано дві черги, і з fanout кожна DLQ отримувала б «мертві» повідомлення обох споживачів.
+
+### 17.3 Події та публікація
+
+- `Platform.EventBus/Abstractions/IntegrationEvent.cs` — базовий `abstract record`: `EventId` (Guid), `OccurredAt`, `CorrelationId`. Версія схеми передається в заголовку `x-schema-version`.
+- Конкретні події — незмінні `sealed record` у `<Сервіс>.Api/IntegrationEvents/Events/`. Як в eShop, кожен сервіс має **власну копію** контракту: спільні лише назва типу і JSON. Публікатор надсилає повний набір полів, а споживач читає потрібні (`UnmappedMemberHandling.Skip`).
+- `RabbitMqEventPublisher`: JSON (`System.Text.Json`, camelCase, enum рядком) і `BasicProperties`: `Persistent = true`, `ContentType`, `MessageId = EventId`, `Type` = назва події, `CorrelationId`, `Timestamp`, `AppId`, заголовки `x-correlation-id`, `x-schema-version`, `x-occurred-at` і `traceparent`. Канал працює з **publisher confirms**: `PublishAsync` завершується, лише коли брокер прийняв повідомлення.
+- **Спершу БД, потім подія.** `Catalog.Bll/Services/ItemService.UpdateAsync` викликає `SaveChangesAsync()`, а потім `ICatalogIntegrationEventService.PublishItemUpdatedAsync`. `Auctions.Bll/Services/AuctionService.ChangeStatusAsync` виконує транзакцію `sp_ChangeAuctionStatus`, а потім `IAuctionsIntegrationEventService.PublishAuctionStatusChangedAsync`. Невдала зміна (наприклад, 409 «час початку не настав») подію не публікує. Інтерфейси лежать у BLL, реалізації — в `<Сервіс>.Api/IntegrationEvents/`.
+- **Збій публікації після коміту** не стає 500, бо зміну вже збережено. Його логують як Error з `ItemId` / `AuctionId`, `EventId` і типом події: подію втрачено. Гарантію доставки дав би **Transactional Outbox** (запис події в ту саму транзакцію + фоновий publisher, як `IntegrationEventLogEF` в eShop). У цій лабі outbox не реалізовано.
+
+### 17.4 Споживачі: підтвердження, повтори, DLQ
+
+`Platform.EventBus/RabbitMq/RabbitMqConsumerBase.cs` — `BackgroundService`. Конкретні споживачі: `Auctions.Api/IntegrationEvents/CatalogEventsConsumer.cs`, `Community.WebApi/IntegrationEvents/CatalogEventsConsumer.cs`, `Catalog.Api/IntegrationEvents/AuctionEventsConsumer.cs` (`AddHostedService` у `Program.cs`). `BasicQos(prefetch 10)`, `BasicConsume(autoAck: false)`, обробник за `BasicProperties.Type` у власному DI-scope.
+
+| Результат обробки | Дія |
+|---|---|
+| успіх | `BasicAckAsync` |
+| постійний збій: некоректний JSON, невідомий тип, доменне правило, валідація | `BasicNackAsync(requeue: false)` → DLX → `.dlq` (без повторів) |
+| тимчасовий збій: БД недоступна, таймаут, deadlock | копія публікується в `<черга>.retry` з `x-retry-count + 1`, `x-last-error` і затримкою 2 / 4 / 8 с, оригінал отримує `Ack` |
+| `x-retry-count` ≥ 3 | `BasicNackAsync(requeue: false)` → DLQ |
+| зупинка застосунку під час обробки | `BasicNackAsync(requeue: true)` |
+
+Повідомлення перепублікується, а не повертається через `requeue`, бо повернене повідомлення приходить без змін. Лічильник у його заголовку не збільшити, і збій повторювався б без паузи. Копія йде через default exchange прямо в чергу **цього** сервісу, тож інші споживачі її не отримують. Зупинка проходить через `stoppingToken`: `BasicCancel`, очікування поточної обробки, закриття каналів. Якщо брокер недоступний на старті, споживач пробує підключитися знову кожні 5 с і не валить застосунок.
+
+### 17.5 Ідемпотентність і порядок подій
+
+| Сервіс | Сховище оброблених подій | Транзакція |
+|---|---|---|
+| Auctions (Dapper) | `dbo.ProcessedEvents` (`db/p1/schema.sql`, PK `EventId`) | `INSERT … WHERE NOT EXISTS` + `UPDATE dbo.Auction` в одній транзакції Unit of Work (`ItemUpdatedIntegrationEventHandler`) |
+| Catalog (EF Core) | `dbo.ProcessedEvents` — міграція `20261117192232_AddProcessedEventsAndAuctionSync` | `ProcessedEvents.Add` + зміна `Item` — один `SaveChangesAsync` (`AuctionStatusChangedIntegrationEventHandler`) |
+| Community (MongoDB) | колекція `processedEvents` (`_id` = EventId, TTL 30 днів) | MongoDB в Aspire без replica set, тому транзакцій немає. Порядок: перевірка → `updateMany` з умовою за часом → позначка (`SyncItemTitleCommandHandler`). Повторне застосування нічого не змінює |
+
+**Out-of-order.** Кожна копія зберігає час останньої застосованої зміни: `Auction.ItemTitleSyncedAt`, `Item.AuctionStatusSyncedAt`, поле `itemTitleSyncedAt` у документах Mongo. Подія, старша за вже застосовану, нічого не перезаписує. Доменне правило проєкції статусу — `Item.ApplyAuctionStatus` (тести в `Catalog.Tests/AuctionStatusProjectionTests.cs`).
+
+### 17.6 Трасування і логування
+
+- `Platform.EventBus/Diagnostics/TracePropagation.cs`. Publisher відкриває спан Producer `catalog-events publish` і записує контекст у заголовки (W3C `traceparent`, через пропагатор OpenTelemetry). Consumer дістає контекст і відкриває спан Consumer `<черга> process` як нащадка. ActivitySource `Platform.Messaging` підключено в `Platform.ServiceDefaults/Extensions.cs`. Вбудовану трасу RabbitMQ.Client вимкнено (`DisableTracing`), щоб механізм було видно явно.
+- Результат: **один trace** — HTTP PUT у Catalog → publish → process в auctions-api і community-api → SQL / MongoDB.
+- Кожен запис обробки має scope `EventType`, `MessageId`, `CorrelationId`, `Queue`, `RetryCount`. Обробники додають бізнес-контекст (`ItemId`, `AuctionId`, стара й нова назва чи статус). Збої логуються з повним винятком.
+- Метрики (Meter `Platform.EventBus`): `messaging.events.published` / `publish_failed`, `messaging.events.processed{outcome = ack | retry | dead_letter | requeue}`, `messaging.process.duration`, gauge `messaging.dlq.depth`. Глибину DLQ консюмер перевіряє кожні 15 с і пише Warning, коли вона зростає.
+
+### 17.7 Перевірка (виконано локально)
+
+```bash
+# 1. Перейменування предмета -> копії в Auctions і Community (за 1–3 с)
+curl -X PUT http://localhost:5280/api/items/2 -H "Content-Type: application/json" -H "X-Correlation-Id: demo-rename" \
+  -d '{"title":"Penny Black, 1840, Great Britain (Plate 1a)","slug":"penny-black-1840-great-britain","categoryId":3,"estimateLow":300,"estimateHigh":600}'
+curl http://localhost:5180/api/auctions/2                        # itemTitle оновлено, ціни без змін
+
+# 2. Статус аукціону -> Item.Status у Каталозі (Active -> InAuction, Cancelled -> Listed)
+curl -X POST http://localhost:5180/api/auctions/<id>/status -H "Content-Type: application/json" -d '{"status":"Active"}'
+curl http://localhost:5280/api/items/<itemId>
+```
+
+| Сценарій | Як перевірити | Результат |
+|---|---|---|
+| Fan-out і topic-фільтрація | Перейменування предмета; `Scheduled` аукціону | Подію обробили обидва споживачі. `auction.scheduled` не потрапив у `catalog.auctions-sync` |
+| Дублікат події | Management UI → Exchanges → `catalog-events` → *Publish message* з тим самим `message_id` / `eventId`, routing key `item.updated`, property `type = ItemUpdatedIntegrationEvent` | `Duplicate ItemUpdatedIntegrationEvent … skipped`, дані не змінено |
+| Некоректний JSON | Те саме, payload `{ not json` | `Permanent failure …`, повідомлення в `auctions.catalog-sync.dlq` і `community.catalog-sync.dlq` (`x-death: rejected`), без повторів |
+| Тимчасовий збій | *Stop* `mongo` у Dashboard, перейменування, через ~50 с *Start* | `Transient failure … Retry 1/3 in 00:00:02`, далі `attempt 2` → `Acked` |
+| Перезапуск споживача | *Stop* `auctions-api`, перейменування кількох предметів, *Start* | Повідомлення чекають у durable-черзі й обробляються після старту |
+
+**Скріншоти для здачі:**
+1. Management UI → *Exchanges* (`catalog-events`, `auctions-events`, `*.dlx`) і *Queues* (основні, `.retry`, `.dlq`) з bindings.
+2. Dashboard → *Traces*: trace `PUT api/items/{id}` → `catalog-events publish` → `auctions.catalog-sync process` / `community.catalog-sync process` → SQL / MongoDB.
+3. Повідомлення в DLQ (*Queues* → `auctions.catalog-sync.dlq` → *Get messages*, заголовок `x-death`).
+4. *(Додатково)* *Structured logs* з фільтром `CorrelationId = demo-rename`.
+
+### 17.8 Відповідність критеріям прийому (Лаба 8)
+
+| № | Критерій | Де виконано |
+|---|---|---|
+| 1 | RabbitMQ в AppHost з volume і Management UI | `Platform.AppHost/AppHost.cs` (`AddRabbitMQ("messaging").WithDataVolume().WithManagementPlugin()`, `WithReference` / `WaitFor`) |
+| 2 | Підключення через Aspire.RabbitMQ.Client (RabbitMQ.Client 7.x) | `Platform.EventBus/Platform.EventBus.csproj`, `EventBusExtensions.cs` (`AddRabbitMQClient`, health check), `Platform.slnx`, `Program.cs` сервісів (`AddEventBus`) |
+| 3 | Декларативна топологія: topic exchange, черги, bindings, DLX/DLQ | `Platform.EventBus/RabbitMq/EventBusTopology.cs` |
+| 4 | Незмінні integration events з EventId і CorrelationId | `Platform.EventBus/Abstractions/IntegrationEvent.cs`, `<Сервіс>.Api/IntegrationEvents/Events/*.cs` |
+| 5 | IEventPublisher з persistent-публікацією в JSON | `Platform.EventBus/Abstractions/IEventPublisher.cs`, `RabbitMq/RabbitMqEventPublisher.cs`, `<Сервіс>.Api/IntegrationEvents/*IntegrationEventService.cs` |
+| 6 | Події публікуються лише після успішного збереження | `Catalog.Bll/Services/ItemService.cs`, `Auctions.Bll/Services/AuctionService.cs`, `*.Bll/IntegrationEvents/` |
+| 7 | Consumer як BackgroundService з ручним підтвердженням | `Platform.EventBus/RabbitMq/RabbitMqConsumerBase.cs`, `<Сервіс>.Api/IntegrationEvents/*Consumer.cs`, `Program.cs` (`AddHostedService`) |
+| 8 | Ack після успіху, Nack без requeue для постійних збоїв | `RabbitMqConsumerBase.cs` (`OnMessageAsync`, `IsPermanentFailure`) |
+| 9 | Ідемпотентні обробники з таблицею оброблених подій | `<Сервіс>.Api/IntegrationEvents/EventHandling/*.cs`, `db/p1/schema.sql`, `Catalog.Dal/Migrations/20261117192232_AddProcessedEventsAndAuctionSync.cs`, `Community.Infrastructure/Messaging/ProcessedEventStore.cs` |
+| 10 | Реплікація копій даних за політикою дублювання | `Auctions.Api/.../ItemUpdatedIntegrationEventHandler.cs`, `Community.Application/Commands/IntegrationEvents/SyncItemTitle/`, `Catalog.Api/.../AuctionStatusChangedIntegrationEventHandler.cs` |
+| 11 | Повтори з лічильником x-retry-count і максимумом | `RabbitMqConsumerBase.cs` (`RetryOrDeadLetterAsync`, `MaxRetryAttempts = 3`), `RabbitMq/MessageHeaders.cs` |
+| 12 | Передача контексту трасування через брокер | `Platform.EventBus/Diagnostics/TracePropagation.cs`, `Platform.ServiceDefaults/Extensions.cs` (`AddSource("Platform.Messaging")`, `AddMeter("Platform.EventBus")`) |
+| 13 | Структуроване логування збоїв з бізнес-контекстом | `RabbitMqConsumerBase.cs` (log scope, Error / Warning з EventType, MessageId, CorrelationId), обробники в `<Сервіс>.Api/IntegrationEvents/EventHandling/` |

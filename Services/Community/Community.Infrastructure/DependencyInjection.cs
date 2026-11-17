@@ -1,6 +1,8 @@
+using Community.Application.Abstractions.Persistence;
 using Community.Application.Abstractions.Queries;
 using Community.Domain.Repositories;
 using Community.Infrastructure.Indexes;
+using Community.Infrastructure.Messaging;
 using Community.Infrastructure.Persistence;
 using Community.Infrastructure.Persistence.Mapping;
 using Community.Infrastructure.Queries;
@@ -50,6 +52,7 @@ public static class DependencyInjection
         services.AddScoped<IDiscussionRepository, DiscussionRepository>();
         services.AddScoped<IExpertOpinionQueries, ExpertOpinionQueries>();
         services.AddScoped<IDiscussionQueries, DiscussionQueries>();
+        services.AddScoped<IProcessedEventStore, ProcessedEventStore>();
 
         services.AddSingleton<MongoIndexInitializer>();
         services.AddSingleton<IDataSeeder, MongoDataSeeder>();

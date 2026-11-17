@@ -19,6 +19,7 @@ public sealed class UnitOfWork : IUnitOfWork
         Categories = new CategoryRepository(context);
         ItemTags = new ItemTagRepository(context);
         Tags = new GenericRepository<Tag>(context);
+        ProcessedEvents = new ProcessedEventRepository(context);
     }
 
     public IItemRepository Items { get; }
@@ -28,6 +29,8 @@ public sealed class UnitOfWork : IUnitOfWork
     public IItemTagRepository ItemTags { get; }
 
     public IGenericRepository<Tag> Tags { get; }
+
+    public IProcessedEventRepository ProcessedEvents { get; }
 
     public async Task<int> SaveChangesAsync(CancellationToken ct = default)
     {

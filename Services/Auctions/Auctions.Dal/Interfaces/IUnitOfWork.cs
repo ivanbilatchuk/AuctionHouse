@@ -11,6 +11,7 @@ public interface IUnitOfWork : IAsyncDisposable
     IAuctionRepository Auctions { get; }
     IBidderRepository Bidders { get; }
     IBidRepository Bids { get; }
+    IProcessedEventRepository ProcessedEvents { get; }
 
     bool HasActiveTransaction { get; }
 

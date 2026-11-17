@@ -26,6 +26,7 @@ public sealed class ItemConfiguration : IEntityTypeConfiguration<Item>
         builder.Property(i => i.EstimateHigh).HasColumnType("decimal(18,2)");
         builder.Property(i => i.Currency).IsRequired().HasColumnType("char(3)").HasMaxLength(3).IsFixedLength().IsUnicode(false);
         builder.Property(i => i.Status).IsRequired().HasConversion<string>().HasMaxLength(20);
+        builder.Property(i => i.AuctionStatusSyncedAt).HasColumnType("datetime2(3)");
         builder.HasModificationAudit();
         builder.HasSoftDeleteAndRowVersion();
 

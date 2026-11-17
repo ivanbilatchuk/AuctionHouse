@@ -26,6 +26,7 @@
     <ProjectReference Include="..\Community.Application\Community.Application.csproj" />
     <ProjectReference Include="..\Community.Infrastructure\Community.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,7 @@
 using AutoMapper;
 using Catalog.Bll.Diagnostics;
 using Catalog.Bll.DTO;
+using Catalog.Bll.IntegrationEvents;
 using Catalog.Bll.Specifications;
 using Catalog.Dal.Interfaces;
 using Catalog.Domain.Entities;
@@ -9,7 +10,11 @@ using Microsoft.Extensions.Logging;
 
 namespace Catalog.Bll.Services;
 
-public sealed class ItemService(IUnitOfWork uow, IMapper mapper, ILogger<ItemService> logger) : IItemService
+public sealed class ItemService(
+    IUnitOfWork uow,
+    IMapper mapper,
+    ICatalogIntegrationEventService integrationEvents,
+    ILogger<ItemService> logger) : IItemService
 {
     public async Task<PagedResult<ItemDto>> GetListAsync(ItemQuery query, CancellationToken ct = default)
     {
@@ -94,12 +99,19 @@ public sealed class ItemService(IUnitOfWork uow, IMapper mapper, ILogger<ItemSer
         if (input.CategoryId != item.CategoryId && !await uow.Categories.ExistsAsync(input.CategoryId, ct))
             throw new ValidationException(nameof(UpdateItemDto.CategoryId), $"Category {input.CategoryId} does not exist.");
 
+        var previousTitle = item.Title;
         item.Rename(input.Title, slug);
         item.ChangeEstimate(input.EstimateLow, input.EstimateHigh);
         item.MoveToCategory(input.CategoryId);
 
         uow.Items.Update(item);
+        // 1) зміни збережено (транзакція SaveChangesAsync) ...
         await uow.SaveChangesAsync(ct);
+
+        logger.LogInformation("Item {ItemId} updated: title {PreviousTitle} -> {Title}", item.Id, previousTitle, item.Title);
+
+        // 2) ... лише тоді — подія ItemUpdated для копій назви в Auctions і Community (Лаба 8).
+        await integrationEvents.PublishItemUpdatedAsync(item, previousTitle, ct);
     }
 
     public async Task ChangeStatusAsync(long id, ChangeItemStatusDto input, CancellationToken ct = default)

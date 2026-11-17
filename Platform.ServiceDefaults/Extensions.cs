@@ -35,6 +35,11 @@ public static class Extensions
     public static readonly string[] BusinessMeters = ["Auctions.Api", "Catalog.Api", "Community.WebApi", "Platform.Aggregator"];
     public const string PollyMeter = "Polly";
 
+    // Лаба 8: шина подій RabbitMQ (Platform.EventBus) — спани publish/process і метрики публікації/обробки/DLQ.
+    // Контекст трасування передається через заголовки повідомлень, тож HTTP-запит -> publish -> process -> БД — один trace.
+    public const string MessagingActivitySource = "Platform.Messaging";
+    public const string EventBusMeter = "Platform.EventBus";
+
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.ConfigureSerilog();
@@ -109,6 +114,7 @@ public static class Extensions
                 .AddMeter(ActivitySourcePrefix + "*")
                 .AddMeter(BusinessMeters)
                 .AddMeter(PollyMeter)
+                .AddMeter(EventBusMeter)
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation())
@@ -119,6 +125,7 @@ public static class Extensions
                     .AddSource(applicationName)
                     .AddSource(ActivitySourcePrefix + "*")
                     .AddSource(MongoDbActivitySource)
+                    .AddSource(MessagingActivitySource)
                     .AddAspNetCoreInstrumentation(options =>
                         // Регулярні перевірки здоров'я від Aspire не засмічують трейси.
                         options.Filter = context => !IsHealthPath(context.Request.Path))

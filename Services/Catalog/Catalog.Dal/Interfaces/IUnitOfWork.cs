@@ -12,5 +12,7 @@ public interface IUnitOfWork
 
     IGenericRepository<Tag> Tags { get; }
 
+    IProcessedEventRepository ProcessedEvents { get; }
+
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 }

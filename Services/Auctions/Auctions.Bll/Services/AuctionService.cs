@@ -1,5 +1,6 @@
 using Auctions.Bll.Diagnostics;
 using Auctions.Bll.DTO;
+using Auctions.Bll.IntegrationEvents;
 using Auctions.Bll.Validation;
 using Auctions.Dal.Interfaces;
 using Auctions.Domain.Exceptions;
@@ -15,6 +16,7 @@ public sealed class AuctionService : IAuctionService
     private readonly IMapper _mapper;
     private readonly IAuctionValidator _validator;
     private readonly TimeProvider _timeProvider;
+    private readonly IAuctionsIntegrationEventService _integrationEvents;
     private readonly ILogger<AuctionService> _logger;
 
     public AuctionService(
@@ -22,12 +24,14 @@ public sealed class AuctionService : IAuctionService
         IMapper mapper,
         IAuctionValidator validator,
         TimeProvider timeProvider,
+        IAuctionsIntegrationEventService integrationEvents,
         ILogger<AuctionService> logger)
     {
         _unitOfWork = unitOfWork;
         _mapper = mapper;
         _validator = validator;
         _timeProvider = timeProvider;
+        _integrationEvents = integrationEvents;
         _logger = logger;
     }
 
@@ -131,12 +135,20 @@ public sealed class AuctionService : IAuctionService
 
         _validator.ValidateStatus(dto.Status);
 
-        var newStatus = await _unitOfWork.Auctions.ChangeStatusAsync(id, dto.Status, dto.Reason, cancellationToken);
+        // 1) Зміна статусу — транзакція всередині sp_ChangeAuctionStatus (повернення застав, історія статусів) ...
+        var change = await _unitOfWork.Auctions.ChangeStatusAsync(id, dto.Status, dto.Reason, cancellationToken);
+        var changedAt = _timeProvider.GetUtcNow().UtcDateTime;
 
-        activity?.SetTag("auction.status", newStatus);
-        _logger.LogInformation("Auction {AuctionId} status changed to {Status} (requested {RequestedStatus})", id, newStatus, dto.Status);
+        activity?.SetTag("auction.status", change.NewStatus);
+        _logger.LogInformation("Auction {AuctionId} status changed from {OldStatus} to {Status} (requested {RequestedStatus})",
+            id, change.OldStatus, change.NewStatus, dto.Status);
 
-        return await GetByIdAsync(id, cancellationToken);
+        var auction = await GetByIdAsync(id, cancellationToken);
+
+        // 2) ... закомічена — лише тоді подія AuctionStatusChanged (Лаба 8): Каталог проєктує її на Item.Status.
+        await _integrationEvents.PublishAuctionStatusChangedAsync(auction, change.OldStatus, changedAt, cancellationToken);
+
+        return auction;
     }
 
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
