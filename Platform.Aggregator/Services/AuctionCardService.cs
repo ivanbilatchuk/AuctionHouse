@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Grpc.Core;
 using Microsoft.Extensions.Options;
+using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.Dto;
 using Polly.CircuitBreaker;
@@ -10,10 +12,12 @@ namespace Platform.Aggregator.Services;
 
 // Збирає картку аукціону з трьох сервісів. Аукціон обов'язковий; лот, висновки й ставки запитуються паралельно,
 // і збій будь-якого з них дає попередження у Warnings замість 500.
+// Транспорт: gRPC (за замовчуванням) або HTTP (?transport=http) — для порівняння затримок.
+// Готова повна картка кешується в Redis на 30 с і перевіряється ДО викликів сервісів.
 public sealed class AuctionCardService(
-    AuctionsClient auctions,
-    CatalogClient catalog,
-    CommunityClient community,
+    GrpcCardDataSource grpcSource,
+    HttpCardDataSource httpSource,
+    AuctionCardCache cardCache,
     IOptions<AggregatorOptions> options,
     TimeProvider timeProvider,
     ILogger<AuctionCardService> logger)
@@ -21,31 +25,46 @@ public sealed class AuctionCardService(
     public const string ActivitySourceName = "AuctionHouse.Aggregator";
     private static readonly ActivitySource ActivitySource = new(ActivitySourceName);
 
-    public async Task<AuctionCardResult> GetAuctionCardAsync(long auctionId, CancellationToken ct)
+    public async Task<AuctionCardResult> GetAuctionCardAsync(long auctionId, string transport, bool useCache, CancellationToken ct)
     {
+        ICardDataSource source = transport == HttpCardDataSource.Name ? httpSource : grpcSource;
+
         using var activity = ActivitySource.StartActivity("BuildAuctionCard");
         activity?.SetTag("auction.id", auctionId);
+        activity?.SetTag("card.transport", source.Transport);
+
+        // Крок 0: готова картка з Redis — без жодного виклику сервісів.
+        if (useCache && await cardCache.GetAsync(auctionId, source.Transport, ct) is { } cachedCard)
+        {
+            activity?.SetTag("card.cache", "hit");
+            logger.LogInformation("Auction card {AuctionId} served from cache (transport {Transport})", auctionId, source.Transport);
+            return AuctionCardResult.Ok(cachedCard, source.Transport, fromCache: true);
+        }
+
+        activity?.SetTag("card.cache", useCache ? "miss" : "bypass");
+        logger.LogInformation("Building auction card {AuctionId} via {Transport}", auctionId, source.Transport);
 
         var warnings = new List<string>();
 
         // Крок 1: аукціон — без нього картки немає (404), а його недоступність — 503.
         var auctionCall = await SafeAsync(AuctionsClient.ServiceName, auctionId,
-            token => auctions.GetAuctionAsync(auctionId, token), ct);
+            token => source.GetAuctionAsync(auctionId, token), ct);
         if (!auctionCall.Succeeded)
-            return AuctionCardResult.Unavailable($"{AuctionsClient.ServiceName} service is unavailable");
+            return AuctionCardResult.Unavailable($"{AuctionsClient.ServiceName} service is unavailable", source.Transport);
         if (auctionCall.Value is null)
         {
             logger.LogInformation("Auction {AuctionId} not found, card is not built", auctionId);
-            return AuctionCardResult.NotFound();
+            return AuctionCardResult.NotFound(source.Transport);
         }
 
         var auction = auctionCall.Value;
         activity?.SetTag("auction.item_id", auction.ItemId);
 
         // Крок 2: паралельно лот, висновки експертів і ставки.
-        var lotTask = SafeAsync(CatalogClient.ServiceName, auctionId, token => catalog.GetItemAsync(auction.ItemId, token), ct);
-        var opinionsTask = SafeAsync(CommunityClient.ServiceName, auctionId, token => community.GetExpertOpinionsAsync(auction.ItemId, token), ct);
-        var bidsTask = SafeAsync(AuctionsClient.ServiceName + "-bids", auctionId, token => auctions.GetBidsAsync(auctionId, token), ct);
+        var lotTask = SafeAsync(CatalogClient.ServiceName, auctionId, token => source.GetLotAsync(auction.ItemId, token), ct);
+        var opinionsTask = SafeAsync(CommunityClient.ServiceName, auctionId, token => source.GetExpertOpinionsAsync(auction.ItemId, token), ct);
+        var bidsTask = SafeAsync(AuctionsClient.ServiceName + "-bids", auctionId,
+            token => source.GetRecentBidsAsync(auctionId, options.Value.RecentBidsCount, token), ct);
 
         await Task.WhenAll(lotTask, opinionsTask, bidsTask);
 
@@ -85,10 +104,13 @@ public sealed class AuctionCardService(
 
         activity?.SetTag("card.warnings", warnings.Count);
         logger.LogInformation(
-            "Auction card {AuctionId} built for item {ItemId}: lot {LotFound}, {OpinionsCount} opinions, {BidsCount} recent bids, {WarningsCount} warnings",
-            auctionId, auction.ItemId, lot is not null, opinions.Count, recentBids.Count, warnings.Count);
+            "Auction card {AuctionId} built via {Transport} for item {ItemId}: lot {LotFound}, {OpinionsCount} opinions, {BidsCount} recent bids, {WarningsCount} warnings",
+            auctionId, source.Transport, auction.ItemId, lot is not null, opinions.Count, recentBids.Count, warnings.Count);
 
-        return AuctionCardResult.Ok(card);
+        if (useCache)
+            await cardCache.SetAsync(card, source.Transport, ct);
+
+        return AuctionCardResult.Ok(card, source.Transport, fromCache: false);
     }
 
     private AuctionCardSummaryDto BuildSummary(AuctionInfoDto auction, LotDto? lot, IReadOnlyList<ExpertOpinionDto> opinions)
@@ -119,7 +141,8 @@ public sealed class AuctionCardService(
             TimeLeft: timeLeft);
     }
 
-    // Обгортка виклику сервісу: логування часу відповіді; мережеві помилки й таймаути -> Succeeded = false.
+    // Обгортка виклику сервісу: логування часу відповіді; мережеві помилки, таймаути й gRPC-статуси
+    // Unavailable / DeadlineExceeded / Cancelled (не з ініціативи клієнта) -> Succeeded = false.
     // Скасування запиту самим клієнтом (ct) не ковтаємо.
     private async Task<ServiceCall<T>> SafeAsync<T>(string service, long auctionId, Func<CancellationToken, Task<T>> call, CancellationToken ct)
     {
@@ -132,26 +155,33 @@ public sealed class AuctionCardService(
             logger.LogInformation("{Service} responded in {Elapsed} ms", service, ElapsedMs(startedAt));
             return new ServiceCall<T>(true, value);
         }
-        catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException
+        catch (Exception ex) when (!ct.IsCancellationRequested && (IsTransientRpc(ex) || ex is HttpRequestException
                                        or TaskCanceledException
                                        or TimeoutRejectedException
                                        or BrokenCircuitException
-                                       or JsonException)
+                                       or JsonException))
         {
-            logger.LogWarning("{Service} is unavailable for auction {AuctionId} after {Elapsed} ms: {ExceptionType} {ExceptionMessage}",
-                service, auctionId, ElapsedMs(startedAt), ex.GetType().Name, ex.Message);
+            logger.LogWarning("{Service} is unavailable for auction {AuctionId} after {Elapsed} ms: {ExceptionType} {GrpcStatus} {ExceptionMessage}",
+                service, auctionId, ElapsedMs(startedAt), ex.GetType().Name, (ex as RpcException)?.StatusCode, ex.Message);
             return new ServiceCall<T>(false, default);
         }
     }
+
+    // Internal/Unknown теж не мають перетворюватися на 500 картки — це збій одного джерела.
+    private static bool IsTransientRpc(Exception ex) => ex is RpcException
+    {
+        StatusCode: StatusCode.Unavailable or StatusCode.DeadlineExceeded or StatusCode.Cancelled
+            or StatusCode.Internal or StatusCode.Unknown or StatusCode.ResourceExhausted
+    };
 
     private static double ElapsedMs(long startedAt) => Math.Round(Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 1);
 
     private readonly record struct ServiceCall<T>(bool Succeeded, T? Value);
 }
 
-public sealed record AuctionCardResult(AuctionCardDto? Card, bool IsNotFound, string? UnavailableReason)
+public sealed record AuctionCardResult(AuctionCardDto? Card, bool IsNotFound, string? UnavailableReason, string Transport, bool FromCache)
 {
-    public static AuctionCardResult Ok(AuctionCardDto card) => new(card, false, null);
-    public static AuctionCardResult NotFound() => new(null, true, null);
-    public static AuctionCardResult Unavailable(string reason) => new(null, false, reason);
+    public static AuctionCardResult Ok(AuctionCardDto card, string transport, bool fromCache) => new(card, false, null, transport, fromCache);
+    public static AuctionCardResult NotFound(string transport) => new(null, true, null, transport, false);
+    public static AuctionCardResult Unavailable(string reason, string transport) => new(null, false, reason, transport, false);
 }

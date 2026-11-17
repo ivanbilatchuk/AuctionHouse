@@ -1,4 +1,5 @@
 using AutoMapper;
+using Community.Application.Caching;
 using Community.Application.Diagnostics;
 using Community.Application.DTO;
 using Community.Domain.Entities;
@@ -10,7 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Community.Application.Commands.ExpertOpinions.CreateExpertOpinion;
 
 public sealed class CreateExpertOpinionCommandHandler(
-    IExpertOpinionRepository repository, IMapper mapper, ILogger<CreateExpertOpinionCommandHandler> logger)
+    IExpertOpinionRepository repository, IMapper mapper, TwoLevelCache cache, ILogger<CreateExpertOpinionCommandHandler> logger)
     : IRequestHandler<CreateExpertOpinionCommand, ExpertOpinionDto>
 {
     public async Task<ExpertOpinionDto> Handle(CreateExpertOpinionCommand request, CancellationToken cancellationToken)
@@ -29,6 +30,8 @@ public sealed class CreateExpertOpinionCommandHandler(
             request.Notes);
 
         await repository.AddAsync(opinion, cancellationToken);
+        await cache.InvalidateAsync(CommunityCacheKeys.OpinionsForItemVersion(request.ItemId),
+            $"expert opinion {opinion.Id} created", cancellationToken);
 
         activity?.SetTag("opinion.id", opinion.Id.ToString());
         logger.LogInformation("Expert opinion {OpinionId} created for item {ItemId}: verdict {Verdict}, confidence {Confidence}",

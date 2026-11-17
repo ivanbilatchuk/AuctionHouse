@@ -97,6 +97,8 @@ public static class Extensions
                     ["deployment.environment"] = builder.Environment.EnvironmentName
                 }))
             .WithMetrics(metrics => metrics
+                // Власні лічильники кешу: AuctionHouse.Catalog.Cache, AuctionHouse.Auctions.Cache, ... (cache.hits / cache.misses).
+                .AddMeter(ActivitySourcePrefix + "*")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation())

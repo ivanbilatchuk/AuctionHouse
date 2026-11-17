@@ -1,5 +1,7 @@
 using System.Reflection;
 using Auctions.Api.ExceptionHandling;
+using Auctions.Api.Grpc;
+using Auctions.Bll.Caching;
 using Auctions.Bll.Mapping;
 using Auctions.Bll.Services;
 using Auctions.Bll.Validation;
@@ -49,9 +51,22 @@ builder.Services.AddScoped<IBidRepository>(sp => sp.GetRequiredService<IUnitOfWo
 builder.Services.AddAutoMapper(cfg => cfg.AddMaps(typeof(AuctionProfile).Assembly));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAuctionValidator, AuctionValidator>();
-builder.Services.AddScoped<IAuctionService, AuctionService>();
 builder.Services.AddScoped<IBidderService, BidderService>();
-builder.Services.AddScoped<IBidService, BidService>();
+
+// Лаба 6: дворівневий кеш. L1 — IMemoryCache з лімітом записів (кожен запис має Size = 1),
+// L2 — Redis через IDistributedCache (рядок підключення "redis" від Aspire або з appsettings.json).
+builder.Services.AddMemoryCache(options => options.SizeLimit = 1024);
+// Короткі таймаути: якщо Redis недоступний, сервіс швидко переходить на БД, а не чекає по 5 с.
+builder.AddRedisDistributedCache("redis", configureOptions: redis =>
+{
+    redis.ConnectTimeout = 2000;
+    redis.AsyncTimeout = 1000;
+    redis.SyncTimeout = 1000;
+});
+builder.Services.AddAuctionsCaching();
+
+// gRPC для внутрішніх викликів (Aggregator); логування кожного виклику — GrpcLoggingInterceptor із ServiceDefaults.
+builder.Services.AddGrpc(options => options.Interceptors.Add<GrpcLoggingInterceptor>());
 
 var app = builder.Build();
 
@@ -66,5 +81,6 @@ app.UseSwaggerUI();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 app.MapDefaultEndpoints();
 app.MapControllers();
+app.MapGrpcService<AuctionsGrpcService>();
 
 app.Run();

@@ -9,7 +9,21 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="13.0.0" />
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.85.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.85.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.0.*" />
+  </ItemGroup>
+
+  <!-- Клієнтські заглушки генеруються з тих самих .proto, що й сервери (єдине джерело контракту). -->
+  <ItemGroup>
+    <Protobuf Include="..\Services\Auctions\Auctions.Api\Protos\auctions.proto" GrpcServices="Client" Link="Protos\auctions.proto" />
+    <Protobuf Include="..\Services\Catalog\Catalog.Api\Protos\catalog.proto" GrpcServices="Client" Link="Protos\catalog.proto" />
+    <Protobuf Include="..\Services\Community\Community.WebApi\Protos\community.proto" GrpcServices="Client" Link="Protos\community.proto" />
   </ItemGroup>
 
   <ItemGroup>

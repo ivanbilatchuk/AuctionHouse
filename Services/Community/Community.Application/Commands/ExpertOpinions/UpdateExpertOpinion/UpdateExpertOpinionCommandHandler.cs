@@ -1,3 +1,4 @@
+using Community.Application.Caching;
 using Community.Domain.Entities;
 using Community.Domain.Exceptions;
 using Community.Domain.Repositories;
@@ -7,7 +8,7 @@ using MongoDB.Bson;
 
 namespace Community.Application.Commands.ExpertOpinions.UpdateExpertOpinion;
 
-public sealed class UpdateExpertOpinionCommandHandler(IExpertOpinionRepository repository)
+public sealed class UpdateExpertOpinionCommandHandler(IExpertOpinionRepository repository, TwoLevelCache cache)
     : IRequestHandler<UpdateExpertOpinionCommand>
 {
     public async Task Handle(UpdateExpertOpinionCommand request, CancellationToken cancellationToken)
@@ -26,5 +27,7 @@ public sealed class UpdateExpertOpinionCommandHandler(IExpertOpinionRepository r
             request.Notes);
 
         await repository.UpdateAsync(opinion, request.Version, cancellationToken);
+        await cache.InvalidateAsync(CommunityCacheKeys.OpinionsForItemVersion(opinion.Item.ItemId),
+            $"expert opinion {request.Id} updated", cancellationToken);
     }
 }
