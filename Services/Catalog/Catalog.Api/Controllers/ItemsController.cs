@@ -1,3 +1,4 @@
+using Catalog.Api.Metrics;
 using Catalog.Bll.DTO;
 using Catalog.Bll.Services;
 using FluentValidation;
@@ -9,7 +10,7 @@ namespace Catalog.Api.Controllers;
 [ApiController]
 [Route("api/items")]
 [Produces("application/json")]
-public sealed class ItemsController(IItemService service) : ControllerBase
+public sealed class ItemsController(IItemService service, CatalogMetrics metrics) : ControllerBase
 {
     /// <summary>Сторінка лотів. Фільтрація, сортування й Skip/Take виконуються в SQL.</summary>
     /// <remarks>Метадані сторінки повертаються в тілі (totalCount, totalPages, hasNext, hasPrevious) і в заголовках X-Total-Count / X-Total-Pages.</remarks>
@@ -61,7 +62,8 @@ public sealed class ItemsController(IItemService service) : ControllerBase
         if (!validation.IsValid)
             return ValidationProblem(validation.AddTo(ModelState));
 
-        var created = await service.CreateAsync(input, ct);
+        var created = await metrics.MeasureAsync("create_item", () => service.CreateAsync(input, ct));
+        metrics.ItemCreated(created.Status);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -81,7 +83,8 @@ public sealed class ItemsController(IItemService service) : ControllerBase
         if (!validation.IsValid)
             return ValidationProblem(validation.AddTo(ModelState));
 
-        await service.UpdateAsync(id, input, ct);
+        await metrics.MeasureAsync("update_item", () => service.UpdateAsync(id, input, ct));
+        metrics.ItemUpdated();
         return NoContent();
     }
 
@@ -101,7 +104,8 @@ public sealed class ItemsController(IItemService service) : ControllerBase
         if (!validation.IsValid)
             return ValidationProblem(validation.AddTo(ModelState));
 
-        await service.ChangeStatusAsync(id, input, ct);
+        await metrics.MeasureAsync("change_item_status", () => service.ChangeStatusAsync(id, input, ct));
+        metrics.ItemStatusChanged(input.Status);
         return NoContent();
     }
 
@@ -134,7 +138,8 @@ public sealed class ItemsController(IItemService service) : ControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Delete(long id, CancellationToken ct)
     {
-        await service.DeleteAsync(id, ct);
+        await metrics.MeasureAsync("delete_item", () => service.DeleteAsync(id, ct));
+        metrics.ItemDeleted();
         return NoContent();
     }
 }

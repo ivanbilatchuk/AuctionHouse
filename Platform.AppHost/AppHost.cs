@@ -29,6 +29,10 @@ builder.Eventing.Subscribe<ResourceReadyEvent>(auctionsDb.Resource, async (@even
     await DatabaseInitializer.ApplyAsync(connectionString, scriptsDirectory, cancellationToken);
 });
 
+// Лаба 7: WithHttpHealthCheck("/health/ready") — Dashboard показує стан ресурсу (Healthy / Degraded / Unhealthy)
+// за readiness-перевірками сервісу (БД, Redis, gRPC-залежності), а WaitFor чекає, поки залежність стане
+// ЗДОРОВОЮ, а не лише запуститься. Недоступний Redis дає Degraded — сервіс працює далі (читає з БД).
+//
 // Сервіси: БД + Redis -> сервіс. Профіль "http": health check і виклики агрегатора йдуть по http,
 // без залежності від довіреного dev-сертифіката (на Linux він зазвичай не довірений).
 // Ендпоінти сервісів беруться з Kestrel:Endpoints у їхніх appsettings.json:
@@ -38,7 +42,7 @@ var auctionsApi = builder.AddProject<Projects.Auctions_Api>("auctions-api", laun
     .WaitFor(auctionsDb)
     .WithReference(redis)
     .WaitFor(redis)
-    .WithHttpHealthCheck("/health", endpointName: "http");
+    .WithHttpHealthCheck("/health/ready", endpointName: "http");
 
 // Catalog: схему створюють EF Core-міграції (MigrateAsync під час старту API), скрипти не потрібні.
 var catalogApi = builder.AddProject<Projects.Catalog_Api>("catalog-api", launchProfileName: "http")
@@ -46,7 +50,7 @@ var catalogApi = builder.AddProject<Projects.Catalog_Api>("catalog-api", launchP
     .WaitFor(catalogDb)
     .WithReference(redis)
     .WaitFor(redis)
-    .WithHttpHealthCheck("/health", endpointName: "http");
+    .WithHttpHealthCheck("/health/ready", endpointName: "http");
 
 // Community: MongoDB; індекси й сідінг створює сам сервіс під час старту.
 var communityApi = builder.AddProject<Projects.Community_WebApi>("community-api", launchProfileName: "http")
@@ -54,7 +58,7 @@ var communityApi = builder.AddProject<Projects.Community_WebApi>("community-api"
     .WaitFor(communityDb)
     .WithReference(redis)
     .WaitFor(redis)
-    .WithHttpHealthCheck("/health", endpointName: "http");
+    .WithHttpHealthCheck("/health/ready", endpointName: "http");
 
 // Агрегатор: сервіси -> aggregator (адреси сервісів, у т. ч. _grpc-ендпоінти, — через service discovery).
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
@@ -62,7 +66,7 @@ var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(auctionsApi).WaitFor(auctionsApi)
     .WithReference(catalogApi).WaitFor(catalogApi)
     .WithReference(communityApi).WaitFor(communityApi)
-    .WithHttpHealthCheck("/health");
+    .WithHttpHealthCheck("/health/ready");
 
 // Gateway — єдина точка входу на фіксованому порту http://localhost:5000.
 builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
@@ -71,6 +75,6 @@ builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
     .WithReference(catalogApi).WaitFor(catalogApi)
     .WithReference(communityApi).WaitFor(communityApi)
     .WithReference(aggregator).WaitFor(aggregator)
-    .WithHttpHealthCheck("/health");
+    .WithHttpHealthCheck("/health/ready");
 
 builder.Build().Run();

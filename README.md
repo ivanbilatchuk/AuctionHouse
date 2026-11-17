@@ -90,6 +90,7 @@ curl -s -i "$GW/api/aggregator/auctions/1/full?transport=http&noCache=true"   # 
 13. [Лабораторна 4 — Clean Architecture + CQRS + MongoDB](#13-лабораторна-4--clean-architecture--cqrs--mongodb)
 14. [Лабораторна 5 — мікросервісна платформа на .NET Aspire](#14-лабораторна-5--мікросервісна-платформа-на-net-aspire)
 15. [Лабораторна 6 — gRPC і дворівневе кешування](#15-лабораторна-6--grpc-і-дворівневе-кешування)
+16. [Лабораторна 7 — Resilience (Polly), бізнес-метрики та Health Checks](#16-лабораторна-7--resilience-polly-бізнес-метрики-та-health-checks)
 
 ---
 
@@ -1334,7 +1335,7 @@ dotnet run --project Platform.AppHost
 3. Кожен виклик обгорнуто в `SafeAsync`, який логує `Calling {Service} for auction {AuctionId}` і `{Service} responded in {Elapsed} ms`. Винятки `HttpRequestException`, таймаут (`TaskCanceledException` не від клієнта, `TimeoutRejectedException`), `BrokenCircuitException` і `JsonException` додають до `warnings` запис на кшталт `"community service is unavailable"`. Відповідь лишається **200**, а не 500.
 4. Перевірки узгодженості дають попередження: лот із каталогу має `id == auction.itemId`, назва лота в аукціоні збігається з каталогом, висновки належать саме цьому `itemId` (чужі відкидаються).
 
-Типізовані клієнти (`Clients/`) зареєстровані як `AddHttpClient<T>(c => c.BaseAddress = new("https+http://auctions-api"))` тощо. Вони десеріалізують відповіді через System.Text.Json в DTO агрегатора (`Dto/`). Таймаути resilience-хендлера скорочено: спроба 2 с, загалом 5 с, одна повторна спроба (секція `Aggregator` в `appsettings.json`), тож недоступний сервіс швидко перетворюється на попередження.
+Типізовані клієнти (`Clients/`) зареєстровані як `AddHttpClient<T>(c => c.BaseAddress = new("https+http://auctions-api"))` тощо. Вони десеріалізують відповіді через System.Text.Json в DTO агрегатора (`Dto/`). Таймаути resilience-хендлера скорочено, тож недоступний сервіс швидко перетворюється на попередження. З лаби 7 параметри задаються окремо для критичних і некритичних сервісів (див. [§16.2](#162-політики-для-клієнтів-aggregator-а-та-їх-обґрунтування)).
 
 Відповідь — `AuctionCardDto(auction, lot?, expertOpinions, recentBids, summary?, warnings)` у camelCase, null-поля пропускаються (`ConfigureHttpJsonOptions` + `AddControllers().AddJsonOptions`, `WhenWritingNull`). `summary` містить `nextMinimumBid`, `reserveMet`, `priceVsEstimate` (поточна ціна відносно оцінки каталогу), `expertConsensus`, `averageConfidence`, `timeLeft`.
 
@@ -1449,7 +1450,7 @@ builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Addre
 builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"));
 ```
 
-`_grpc.<ресурс>` — це іменований ендпоінт для service discovery. gRPC-клієнти побудовані на тому самому `IHttpClientFactory`, тож `ConfigureHttpClientDefaults` із ServiceDefaults додає їм service discovery, resilience (у агрегаторі — спроба 2 с, загалом 5 с) і `CorrelationIdHandler`. Через нього `X-Correlation-Id` потрапляє в gRPC metadata.
+`_grpc.<ресурс>` — це іменований ендпоінт для service discovery. gRPC-клієнти побудовані на тому самому `IHttpClientFactory`, тож `ConfigureHttpClientDefaults` із ServiceDefaults додає їм service discovery, resilience (в агрегаторі — власні профілі, див. §16) і `CorrelationIdHandler`. Через нього `X-Correlation-Id` потрапляє в gRPC metadata.
 
 ### 15.3 Агрегація через gRPC
 
@@ -1515,7 +1516,7 @@ curl -s -D - -o /dev/null "$GW/api/aggregator/auctions/1/full" | grep -i x-aggre
 Для порівняння gRPC і HTTP у Dashboard відкрийте *Traces* і порівняйте тривалість спанів `BuildAuctionCard` з тегом `card.transport = grpc` і `= http`. Перший запит кожного виду пропустіть, бо це прогрів.
 
 **Сценарії відмов:**
-- **Зупинити `redis`** у Dashboard (*Stop*). Запити до `/api/items/2` і до агрегатора продовжують працювати з БД. У логах з'являється `Redis (L2) get failed … Falling back to database`, health сервісів стає *Unhealthy* (перевірка Redis), але відповіді йдуть. Після *Start* кеш підхоплюється сам.
+- **Зупинити `redis`** у Dashboard (*Stop*). Запити до `/api/items/2` і до агрегатора продовжують працювати з БД. У логах з'являється `Redis (L2) get failed … Falling back to database`, health сервісів стає *Degraded* (з лаби 7, §16.6), але відповіді йдуть. Після *Start* кеш підхоплюється сам.
 - **Зупинити `catalog-api`.** `GET $GW/api/aggregator/auctions/1/full?noCache=true` повертає 200 без `lot` і з `"warnings": ["catalog service is unavailable"]`, у логах агрегатора — `catalog is unavailable … RpcException Unavailable`.
 
 **Що показати в Dashboard:**
@@ -1541,3 +1542,187 @@ curl -s -D - -o /dev/null "$GW/api/aggregator/auctions/1/full" | grep -i x-aggre
 | 12 | Кеш агрегованої відповіді в Redis | `Platform.Aggregator/Caching/AuctionCardCache.cs`, `AggregatorCacheKeys.cs` |
 | 13 | Серверний interceptor | `Platform.ServiceDefaults/GrpcLoggingInterceptor.cs` |
 | 14 | Метрики кешу | `*/Caching/CacheMetrics.cs`, `Platform.Aggregator/Caching/CacheMetrics.cs`, `Platform.ServiceDefaults/Extensions.cs` (`AddMeter("AuctionHouse.*")`) |
+
+---
+
+## 16. Лабораторна 7 — Resilience (Polly), бізнес-метрики та Health Checks
+
+Платформа з лаб 5–6 отримала:
+- **політики resilience** для HTTP- і gRPC-клієнтів Aggregator-а, різні для критичних і некритичних сервісів;
+- **retry за gRPC-статусами**;
+- **власні бізнес-метрики** (Meter API);
+- **health checks** усіх залежностей з розділенням на liveness і readiness.
+
+Запуск такий самий: `dotnet run --project Platform.AppHost`.
+
+### 16.1 Standard Resilience Handler без нашарування
+
+`Platform.ServiceDefaults/Extensions.cs` підключає `AddStandardResilienceHandler()` до **всіх** `HttpClient` через `ConfigureHttpClientDefaults`. Це стосується і typed-клієнтів, і gRPC-клієнтів, бо їх створює та сама `IHttpClientFactory`. Aggregator-у потрібні власні параметри, тому кожен його клієнт спершу **знімає** стандартний обробник (`RemoveAllResilienceHandlers()`) і лише потім додає свій (`Platform.Aggregator/Resilience/ResilienceExtensions.cs`, `AddServiceResilience`). Обробники не нашаровуються, повтори не множаться (3 × 3).
+
+Gateway та інші клієнти працюють зі стандартними налаштуваннями (Таблиця 2 методички).
+
+### 16.2 Політики для клієнтів Aggregator-а та їх обґрунтування
+
+Профілі задано в `Platform.Aggregator/Resilience/ServiceResilienceProfile.cs`, призначення клієнтам — у `Platform.Aggregator/Program.cs`.
+
+| Клієнт (HTTP + gRPC) | Профіль | Чому |
+|---|---|---|
+| `auctions-api` (`AuctionsClient`, `AuctionsServiceClient`) | **критичний** | Без аукціону картки немає: Aggregator повертає 503 |
+| `catalog-api` (`CatalogClient`, `CatalogServiceClient`) | **критичний** | Без лота картка неповна: немає назви, естімейту, валюти |
+| `community-api` (`CommunityClient`, `CommunityServiceClient`) | **некритичний** | Висновки експертів додаткові. Без них Aggregator повертає часткову картку з `warnings` |
+
+| Параметр | Критичний | Некритичний | Обґрунтування |
+|---|---|---|---|
+| `Retry.MaxRetryAttempts` | 3 | 1 | Критичний сервіс варто «дочекатися» після короткого збою. Некритичний — швидко здатися |
+| `Retry.Delay` / `BackoffType` / `UseJitter` | 300 мс / Exponential / true | 200 мс / Exponential / true | Експоненційна затримка дає сервісу відновитися. Jitter розносить повтори в часі (thundering herd) |
+| `Retry.DisableForUnsafeHttpMethods()` | так | так | POST/PUT/DELETE не повторюються, щоб не дублювати зміни. gRPC-виклики теж POST, їх повторює retry-політика каналу (§16.3) |
+| `AttemptTimeout` | 2 с | 1 с | Читання за id/itemId у нормі займає десятки мс. 2 с — запас на холодний старт і SQL. Для некритичного довго не чекаємо |
+| `TotalRequestTimeout` | 11 с | 3 с | ≈ спроба × (1 + повтори) + затримки: 2 × 4 + (0.3 + 0.6 + 1.2) ≈ 10.1 с; 1 × 2 + 0.2 ≈ 2.2 с. Інакше повтори не встигнуть |
+| `CircuitBreaker.FailureRatio` | 0.3 | 0.7 | Критичний — **чутливіший**: розмикається раніше і не перевантажує сервіс, що відновлюється. Некритичний терпимий до збоїв |
+| `CircuitBreaker.MinimumThroughput` | 5 | 10 | Навчальний стенд з малим трафіком: при стандартних 100 breaker не спрацював би ніколи |
+| `CircuitBreaker.SamplingDuration` | 30 с | 20 с | ≥ 2 × `AttemptTimeout` (вимога валідації опцій) |
+| `CircuitBreaker.BreakDuration` | 10 с | 30 с | Критичний сервіс пробуємо знову частіше. Некритичному даємо більше часу, бо без нього можна обійтися |
+| gRPC `MaxAttempts` | 4 | 2 | Разом із першою спробою, як і HTTP: 1 + 3 і 1 + 1 |
+| gRPC `InitialBackoff` / `MaxBackoff` / ×2 | 0.3 с / 3 с | 0.2 с / 0.5 с | Узгоджено з HTTP-затримками |
+| gRPC `RetryableStatusCodes` | `Unavailable`, `ResourceExhausted` | `Unavailable` | Лише тимчасові статуси. `NotFound`, `InvalidArgument` тощо не повторюються |
+
+Переходи circuit breaker логуються. `OnOpened` пише рівень **Error** (`Circuit opened for {Client} … for {BreakDuration}: {Reason}`), `OnHalfOpened` — **Warning**, `OnClosed` — **Information** (категорія `Platform.Aggregator.Resilience`). Повтори та таймаути логує вбудована телеметрія Polly (категорія `Polly`).
+
+### 16.3 Retry gRPC-клієнтів за gRPC-статусами
+
+gRPC повертає помилку (`Unavailable`, `DeadlineExceeded`, …) статусом у трейлерах відповіді з **HTTP 200**, тож HTTP-обробник її не бачить. Тому для gRPC-клієнтів resilience має два рівні:
+
+1. **HTTP-обробник** (`AddServiceResilience`) — таймаут спроби, загальний таймаут, circuit breaker на мережеві збої. HTTP-retry для них вимкнено (`DisableForUnsafeHttpMethods`, бо gRPC — це POST).
+2. **Retry-політика каналу** (`AddGrpcRetryPolicy`): `ServiceConfig` → `MethodConfig { Names = { MethodName.Default } }` → `RetryPolicy` (`MaxAttempts`, `InitialBackoff`, `MaxBackoff`, `BackoffMultiplier`, `RetryableStatusCodes`).
+
+Перевірено локально з вимкненим `auctions-api`. У логах видно `Evaluated retry for failed gRPC call … Status code: 'Unavailable'`, потім `Circuit opened`. Після розмикання HTTP-запити до сервісу відхиляються за ~2 мс (`BrokenCircuitException`), без очікування таймауту. gRPC-канал отримує їх як `Unavailable` і ще встигає зробити кілька коротких повторів із backoff (~0.4–1.2 с). Потім Aggregator повертає 503 (аукціон) або часткову картку (лот / висновки).
+
+### 16.4 Graceful degradation кешу Redis
+
+Механізм зроблено ще в лабі 6, у лабі 7 до нього додано health check зі статусом Degraded.
+- `*/Caching/TwoLevelCache.cs` (Catalog.Bll, Auctions.Bll, Community.Application). Будь-який збій Redis (`RedisConnectionException`, `RedisTimeoutException` тощо) при get/set/remove перехоплюється і логується як Warning `Redis (L2) {op} failed … Falling back to database`. Дані читаються з БД, L2 пропускається 30 с.
+- `Platform.Aggregator/Caching/AuctionCardCache.cs`. Збій читання чи запису картки логується, і картка збирається з сервісів.
+- Короткі таймаути Redis (connect 2 с, операція 1 с), тож запит не зависає.
+- Вбудований health check Redis від Aspire (Unhealthy) вимкнено (`DisableHealthChecks = true`). Замість нього — власний `redis-cache` зі статусом **Degraded** (§16.6).
+
+### 16.5 Бізнес-метрики
+
+Класи метрик лежать у `<Сервіс>.Api/Metrics/`, реєструються як Singleton, Meter створюється через `IMeterFactory`. Назва Meter збігається з назвою сервісу. Meter-и та `Polly` додано в `ServiceDefaults` (`AddMeter(BusinessMeters)`, `AddMeter("Polly")`).
+
+| Meter | Інструмент | Тип | Теги |
+|---|---|---|---|
+| `Auctions.Api` (`Auctions.Api/Metrics/AuctionsMetrics.cs`) | `auctions.created` | Counter | `auction.status` |
+| | `auctions.status_changed` | Counter | `auction.status` (новий) |
+| | `auctions.bids.placed` | Counter | `bid.position` = leading / outbid |
+| | `auctions.bidders.registered` | Counter | — |
+| | `auctions.bid.amount` | Histogram | `bid.position` |
+| | `auctions.operation.duration` (ms) | Histogram | `operation`, `status` = success / failure |
+| | `auctions.operations.in_progress` | ObservableGauge | — |
+| `Catalog.Api` (`Catalog.Api/Metrics/CatalogMetrics.cs`) | `catalog.items.created` / `.status_changed` | Counter | `item.status` |
+| | `catalog.items.updated` / `.deleted` | Counter | — |
+| | `catalog.operation.duration` (ms) | Histogram | `operation`, `status` |
+| | `catalog.operations.in_progress` | ObservableGauge | — |
+| `Community.WebApi` (`Community.WebApi/Metrics/CommunityMetrics.cs`) | `community.opinions.created` | Counter | `opinion.verdict`, `category.kind` |
+| | `community.opinions.updated` / `.deleted`, `community.discussions.created`, `community.comments.added` | Counter | — |
+| | `community.opinion.confidence` (%) | Histogram | `opinion.verdict` |
+| | `community.operation.duration` (ms) | Histogram | `operation`, `status` |
+| | `community.operations.in_progress` | ObservableGauge | — |
+
+- Лічильник збільшується одразу після успішної операції, у контролері.
+- Тривалість (`MeasureAsync`, `Stopwatch`) записується для **всіх** виконань, з тегом `status = failure` для невдалих. Виняток прокидається далі.
+- Gauge показує знімок кількості операцій, що виконуються зараз (зчитується callback-ом під час збору).
+- **Кардинальність.** Усі теги мають скінченну множину значень (статуси, вердикти, назви операцій). Id аукціонів, лотів, учасників, експертів, суми та часові мітки в теги не потрапляють.
+- Лічильники кешу лаби 6 (`AuctionHouse.*.Cache`: `cache.hits` / `cache.misses`) лишилися без змін.
+
+**Нормальні діапазони (4.6).**
+
+| Метрика | Норма | Тривожний сигнал |
+|---|---|---|
+| `*.operation.duration` p95 | < 200 мс (запис у БД) | — |
+| `*.operation.duration` з `status = failure` | одиничні значення (409 / 400 — бізнес-правила) | стрибок означає проблему з БД |
+| `*.operations.in_progress` | 0–кілька | постійне зростання означає, що операції зависають |
+| `resilience.polly.strategy.events{event.name=OnRetry}` | поодинокі | — |
+| `resilience.polly.strategy.events{event.name=OnCircuitOpened}` | 0 | будь-яке значення — сервіс систематично відмовляє |
+
+### 16.6 Health checks: liveness і readiness
+
+| Сервіс | Перевірка | Що робить | Статус збою | Теги | Таймаут |
+|---|---|---|---|---|---|
+| усі | `self` | процес відповідає | — | `live` | — |
+| auctions-api | `auctions-db` | SQL Server `SELECT 1;` | Unhealthy | `database`, `sql`, `ready` | 5 с |
+| catalog-api | `catalog-db` | SQL Server `SELECT 1;` | Unhealthy | `database`, `sql`, `ready` | 5 с |
+| community-api | `community-db` | MongoDB `ping` до бази сервісу | Unhealthy | `database`, `mongodb`, `ready` | 5 с |
+| сервіси + aggregator | `redis-cache` | Redis `PING` | **Degraded** | `cache`, `redis`, `ready` | 3 с |
+| aggregator | `auctions-api`, `catalog-api` | gRPC `grpc.health.v1.Health/Check`, дедлайн 2 с | Unhealthy | `grpc`, `downstream`, `ready` | 3 с |
+| aggregator | `community-api` | те саме | **Degraded** (некритичний) | `grpc`, `downstream`, `ready` | 3 с |
+
+- Реєстрація: `<Сервіс>.Api/HealthChecks/*HealthChecks.cs` (пакети Xabaril `AspNetCore.HealthChecks.SqlServer` / `MongoDb` / `Redis`) і `Platform.Aggregator/HealthChecks/GrpcServiceHealthCheck.cs`.
+- **gRPC Health Checking Protocol.** У кожному сервісі є `AddGrpcHealthChecks()` + `MapGrpcHealthChecksService()`. Статус `""` обчислюється з тих самих перевірок із тегом `ready`. Aggregator перевіряє його власним `IHealthCheck` через `Health.HealthClient`: окремий іменований клієнт без resilience-обробника, короткий дедлайн, `RpcException` → статус збою + Warning у лог.
+- **Endpoints** (`Platform.ServiceDefaults/Extensions.cs`, `MapDefaultEndpoints`) доступні **в усіх середовищах**, не лише в Development:
+  - `/health/live` (і аліас `/alive`) — лише `live`, без зовнішніх залежностей, < 1 мс;
+  - `/health/ready` — перевірки з тегом `ready`;
+  - `/health` — усі перевірки.
+
+  Відповідь — JSON із деталями кожної перевірки (`HealthChecks/HealthCheckResponseWriter.cs`): статус, опис, тривалість, теги, тип і повідомлення помилки, без stack trace. Healthy і Degraded відповідають 200, Unhealthy — 503.
+- **AppHost.** Для всіх сервісів, aggregator і gateway стоїть `WithHttpHealthCheck("/health/ready")`. Dashboard показує стан ресурсу, а `WaitFor` чекає, поки залежність стане **здоровою**, а не лише запуститься.
+
+Приклад: Redis зупинено, SQL Server працює.
+
+```json
+{ "status": "Degraded", "checks": [
+  { "name": "auctions-db", "status": "Healthy", "tags": ["database","sql","ready"] },
+  { "name": "redis-cache", "status": "Degraded", "error": "RedisConnectionException: It was not possible to connect to the redis server(s)…" } ] }
+```
+
+### 16.7 Перевірка та знімки екрана для здачі
+
+Порти сервісів (http): auctions-api 5180, catalog-api 5280, community-api 5380, aggregator 5480, gateway 5000.
+
+```bash
+GW=http://localhost:5000
+
+# Liveness / readiness (напряму в сервіс, бо gateway проксює лише /api/*)
+curl -s http://localhost:5180/health/live
+curl -s http://localhost:5180/health/ready
+curl -s http://localhost:5480/health/ready      # aggregator: gRPC-залежності + Redis
+
+# Бізнес-метрики: кілька ставок -> auctions.bids.placed, auctions.operation.duration.
+# Кожна наступна ставка має бути вищою за поточну ціну + крок і від іншого учасника; 409 теж потрапляє в duration зі status=failure
+curl -s -X POST "$GW/api/auctions/1/bids" -H "Content-Type: application/json" -d '{"bidderId":2,"amount":7000}'
+curl -s -X POST "$GW/api/auctions/1/bids" -H "Content-Type: application/json" -d '{"bidderId":3,"amount":7500}'
+
+# Resilience: серія запитів до картки (noCache=true — без кешу картки)
+for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" "$GW/api/aggregator/auctions/1/full?noCache=true"; done
+```
+
+| Сценарій | Що зробити | Очікуваний результат |
+|---|---|---|
+| Тимчасовий збій | *Stop* `community-api` у Dashboard на 5–10 с, запити до картки | Швидка часткова відповідь (`warnings`). У логах повтори. Метрика `OnRetry` |
+| Circuit breaker | Залишити `catalog-api` зупиненим і зробити 10+ запитів (`transport=http`) | `Circuit opened for CatalogClient (critical)` (Error). Далі `BrokenCircuitException` за кілька мс. Через 10 с half-open і знову open/closed |
+| Redis | *Stop* `redis` | `/health/ready` → `Degraded` (HTTP 200). Сервіси відповідають з БД. У логах `Falling back to database` |
+| SQL Server | *Stop* `sql` | `/health/live` → 200, `/health/ready` → 503 (`auctions-db: Unhealthy`) |
+| Бізнес-метрики | Кілька POST на ставки та аукціони | *Metrics → auctions-api → `auctions.bids.placed`* з фільтром `bid.position`. Розподіл `auctions.operation.duration` |
+
+**Скріншоти для здачі:**
+1. *Metrics → aggregator → `resilience.polly.strategy.events`*, фільтр `event.name` = `OnRetry` / `OnCircuitOpened`. Фільтр `pipeline.name` = `CatalogClient-standard` тощо.
+2. Власна бізнес-метрика, наприклад `auctions.bids.placed` або `auctions.operation.duration`.
+3. Відповідь `/health/ready` зі статусом `Degraded` при зупиненому Redis.
+4. *Resources* зі статусами ресурсів (зелений / жовтий / червоний).
+5. *(Додатково)* *Structured logs*: фільтр за категорією `Polly` або `Platform.Aggregator.Resilience`, рядок `Circuit opened`.
+
+### 16.8 Відповідність критеріям прийому (Лаба 7)
+
+| № | Критерій | Де виконано |
+|---|---|---|
+| 1 | Standard Resilience Handler для всіх клієнтів без нашарування | `Platform.ServiceDefaults/Extensions.cs` (`ConfigureHttpClientDefaults` → `AddStandardResilienceHandler`), `Platform.Aggregator/Resilience/ResilienceExtensions.cs` (`RemoveAllResilienceHandlers()` перед власним обробником) |
+| 2 | Retry-політика gRPC-клієнтів за gRPC-статусами | `Platform.Aggregator/Resilience/ResilienceExtensions.cs` (`AddGrpcRetryPolicy`: `ServiceConfig` / `MethodConfig` / `RetryPolicy`), `Program.cs` |
+| 3 | Налаштовані retry, circuit breaker і таймаути | `ResilienceExtensions.cs` (jitter, exponential, `DisableForUnsafeHttpMethods`, `FailureRatio` / `MinimumThroughput` / `SamplingDuration` / `BreakDuration`, `OnOpened` / `OnHalfOpened` / `OnClosed`, узгоджені таймаути), `ServiceResilienceProfile.cs` |
+| 4 | Різні політики для критичних і некритичних сервісів з обґрунтуванням | `ServiceResilienceProfile.cs` (`Critical`, `NonCritical`), `Platform.Aggregator/Program.cs`, цей README §16.2 |
+| 5 | Graceful degradation кешу Redis | `*/Caching/TwoLevelCache.cs`, `Platform.Aggregator/Caching/AuctionCardCache.cs` |
+| 6 | Клас бізнес-метрик з лічильниками через IMeterFactory | `Auctions.Api/Metrics/AuctionsMetrics.cs`, `Catalog.Api/Metrics/CatalogMetrics.cs`, `Community.WebApi/Metrics/CommunityMetrics.cs`; `Platform.ServiceDefaults/Extensions.cs` (`AddMeter(BusinessMeters)`, `AddMeter("Polly")`) |
+| 7 | Гістограми тривалості та gauge з низькою кардинальністю | ті самі класи (`*.operation.duration` для success і failure, `ObservableGauge *.operations.in_progress`) |
+| 8 | Health checks SQL Server і MongoDB з іменами, тегами й таймаутом | `Auctions.Api/HealthChecks/AuctionsHealthChecks.cs`, `Catalog.Api/HealthChecks/CatalogHealthChecks.cs`, `Community.WebApi/HealthChecks/CommunityHealthChecks.cs`, `Program.cs` сервісів |
+| 9 | Health check Redis зі статусом Degraded | ті самі файли + `Platform.Aggregator/Program.cs` (`AddRedis(..., failureStatus: HealthStatus.Degraded)`) |
+| 10 | gRPC Health Checking Protocol і перевірка залежностей в Aggregator | `Program.cs` сервісів (`AddGrpcHealthChecks`, `MapGrpcHealthChecksService`), `Platform.Aggregator/HealthChecks/GrpcServiceHealthCheck.cs` |
+| 11 | Розділені liveness і readiness з деталями | `Platform.ServiceDefaults/Extensions.cs` (`/health/live`, `/health/ready`), `Platform.ServiceDefaults/HealthChecks/HealthCheckResponseWriter.cs` |
+| 12 | AppHost показує стан ресурсів через WithHttpHealthCheck | `Platform.AppHost/AppHost.cs` (`WithHttpHealthCheck("/health/ready")` + `WaitFor`) |

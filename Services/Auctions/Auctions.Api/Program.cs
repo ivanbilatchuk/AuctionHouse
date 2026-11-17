@@ -1,6 +1,8 @@
 using System.Reflection;
 using Auctions.Api.ExceptionHandling;
 using Auctions.Api.Grpc;
+using Auctions.Api.HealthChecks;
+using Auctions.Api.Metrics;
 using Auctions.Bll.Caching;
 using Auctions.Bll.Mapping;
 using Auctions.Bll.Services;
@@ -9,6 +11,7 @@ using Auctions.Dal.Interfaces;
 using Auctions.Dal.Uow;
 using Microsoft.OpenApi.Models;
 using Platform.ServiceDefaults;
+using Platform.ServiceDefaults.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,7 +43,11 @@ builder.Services.AddProblemDetails(options =>
         context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-builder.Services.AddHealthChecks();
+// Лаба 7: health checks SQL Server (Unhealthy) і Redis (Degraded) з тегом "ready" — /health/ready.
+builder.Services.AddAuctionsHealthChecks(builder.Configuration);
+
+// Лаба 7: бізнес-метрики (Meter "Auctions.Api"), Singleton.
+builder.Services.AddSingleton<AuctionsMetrics>();
 
 builder.Services.AddScoped<IUnitOfWork>(sp =>
     new UnitOfWork(connectionString, sp.GetRequiredService<ILogger<UnitOfWork>>()));
@@ -57,7 +64,8 @@ builder.Services.AddScoped<IBidderService, BidderService>();
 // L2 — Redis через IDistributedCache (рядок підключення "redis" від Aspire або з appsettings.json).
 builder.Services.AddMemoryCache(options => options.SizeLimit = 1024);
 // Короткі таймаути: якщо Redis недоступний, сервіс швидко переходить на БД, а не чекає по 5 с.
-builder.AddRedisDistributedCache("redis", configureOptions: redis =>
+// Власний health check Redis зі статусом Degraded (AuctionsHealthChecks) замінює вбудований Unhealthy-check Aspire.
+builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true, redis =>
 {
     redis.ConnectTimeout = 2000;
     redis.AsyncTimeout = 1000;
@@ -67,6 +75,13 @@ builder.Services.AddAuctionsCaching();
 
 // gRPC для внутрішніх викликів (Aggregator); логування кожного виклику — GrpcLoggingInterceptor із ServiceDefaults.
 builder.Services.AddGrpc(options => options.Interceptors.Add<GrpcLoggingInterceptor>());
+// Стандартний gRPC Health Checking Protocol (grpc.health.v1.Health): статус "" обчислюється з тих самих
+// ASP.NET Core health checks, що й /health/ready (тег "ready"). Його викликає health check Aggregator-а.
+builder.Services.AddGrpcHealthChecks(options =>
+{
+    options.Services.Clear();
+    options.Services.Map("", context => context.Tags.Contains(HealthTags.Ready));
+});
 
 var app = builder.Build();
 
@@ -82,5 +97,6 @@ app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 app.MapDefaultEndpoints();
 app.MapControllers();
 app.MapGrpcService<AuctionsGrpcService>();
+app.MapGrpcHealthChecksService();
 
 app.Run();

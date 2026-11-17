@@ -1,6 +1,5 @@
 using Community.Application.Abstractions.Queries;
 using Community.Domain.Repositories;
-using Community.Infrastructure.HealthChecks;
 using Community.Infrastructure.Indexes;
 using Community.Infrastructure.Persistence;
 using Community.Infrastructure.Persistence.Mapping;
@@ -55,7 +54,7 @@ public static class DependencyInjection
         services.AddSingleton<MongoIndexInitializer>();
         services.AddSingleton<IDataSeeder, MongoDataSeeder>();
 
-        services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
+        // Health check MongoDB реєструється у Community.WebApi/HealthChecks (Лаба 7).
 
         return services;
     }

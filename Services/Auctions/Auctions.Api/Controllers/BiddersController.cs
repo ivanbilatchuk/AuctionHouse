@@ -1,3 +1,4 @@
+using Auctions.Api.Metrics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -11,10 +12,12 @@ namespace Auctions.Api.Controllers;
 public class BiddersController : ControllerBase
 {
     private readonly IBidderService _bidderService;
+    private readonly AuctionsMetrics _metrics;
 
-    public BiddersController(IBidderService bidderService)
+    public BiddersController(IBidderService bidderService, AuctionsMetrics metrics)
     {
         _bidderService = bidderService;
+        _metrics = metrics;
     }
 
     /// <summary>Список учасників.</summary>
@@ -50,6 +53,11 @@ public class BiddersController : ControllerBase
     public async Task<ActionResult<RegistrationDto>> RegisterForAuction(
         long id,
         RegisterForAuctionDto dto,
-        CancellationToken cancellationToken) =>
-        Ok(await _bidderService.RegisterForAuctionAsync(id, dto, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        var registration = await _metrics.MeasureAsync("register_bidder",
+            () => _bidderService.RegisterForAuctionAsync(id, dto, cancellationToken));
+        _metrics.BidderRegistered();
+        return Ok(registration);
+    }
 }
