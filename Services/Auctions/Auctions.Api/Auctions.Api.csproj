@@ -26,6 +26,7 @@
     <ProjectReference Include="..\Auctions.Bll\Auctions.Bll.csproj" />
     <ProjectReference Include="..\Auctions.Dal\Auctions.Dal.csproj" />
     <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
   </ItemGroup>
 
 </Project>

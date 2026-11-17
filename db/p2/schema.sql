@@ -187,3 +187,24 @@ BEGIN
         ON dbo.ItemTag (TagId, ItemId);
 END
 GO
+
+-- Лаба 8 (міграція 20261117192232_AddProcessedEventsAndAuctionSync).
+-- Item.AuctionStatusSyncedAt -- час події Auctions, застосованої до статусу останньою (захист від out-of-order).
+IF COL_LENGTH(N'dbo.Item', N'AuctionStatusSyncedAt') IS NULL
+    ALTER TABLE dbo.Item ADD AuctionStatusSyncedAt DATETIME2(3) NULL;
+GO
+
+-- ProcessedEvents -- ідемпотентність споживача подій Auctions (EventId записується в тій самій транзакції SaveChanges).
+IF OBJECT_ID(N'dbo.ProcessedEvents', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ProcessedEvents
+    (
+        EventId     UNIQUEIDENTIFIER NOT NULL,
+        EventType   NVARCHAR(200)    NOT NULL,
+        ProcessedAt DATETIME2(3)     NOT NULL CONSTRAINT DF_ProcessedEvents_ProcessedAt DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT PK_ProcessedEvents PRIMARY KEY CLUSTERED (EventId)
+    );
+
+    CREATE NONCLUSTERED INDEX IX_ProcessedEvents_ProcessedAt ON dbo.ProcessedEvents (ProcessedAt);
+END
+GO

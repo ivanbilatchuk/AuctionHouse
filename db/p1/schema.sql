@@ -308,3 +308,30 @@ LEFT JOIN dbo.Bidder       AS b ON b.BidderId  = a.LeadingBidderId
 WHERE   a.IsDeleted = 0
   AND   a.Status IN (N'Scheduled', N'Active');
 GO
+
+-- 10. Лаба 8: синхронізація копії назви предмета подіями Каталогу (політика дублювання №1).
+-- ItemTitleSyncedAt -- час події ItemUpdated, застосованої останньою: подія, що прийшла пізніше за новішу
+-- (out-of-order), не перезаписує новіші дані. NULL -- лише знімок під час sp_CreateAuction.
+IF COL_LENGTH(N'dbo.Auction', N'ItemTitleSyncedAt') IS NULL
+    ALTER TABLE dbo.Auction ADD ItemTitleSyncedAt DATETIME2(3) NULL;
+GO
+
+-- 11. Лаба 8: ProcessedEvents -- ідемпотентність споживача integration events.
+-- EventId записується в ТІЙ САМІЙ транзакції, що й бізнес-зміни (Unit of Work): або подію застосовано
+-- й позначено обробленою, або ні те, ні інше. PRIMARY KEY: повторна доставка (at-least-once) не обробляється вдруге,
+-- порушення PK (2627) при конкурентній доставці означає «уже оброблено».
+IF OBJECT_ID(N'dbo.ProcessedEvents', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.ProcessedEvents
+    (
+        EventId     UNIQUEIDENTIFIER NOT NULL,
+        EventType   NVARCHAR(200)    NOT NULL,
+        ProcessedAt DATETIME2(3)     NOT NULL CONSTRAINT DF_ProcessedEvents_ProcessedAt DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT PK_ProcessedEvents PRIMARY KEY CLUSTERED (EventId)
+    );
+
+    -- Запит: періодичне очищення записів, старших за термін можливої повторної доставки.
+    CREATE NONCLUSTERED INDEX IX_ProcessedEvents_ProcessedAt
+        ON dbo.ProcessedEvents (ProcessedAt);
+END
+GO

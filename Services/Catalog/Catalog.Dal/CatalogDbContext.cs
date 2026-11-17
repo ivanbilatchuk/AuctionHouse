@@ -1,3 +1,4 @@
+using Catalog.Dal.Entities;
 using Catalog.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
@@ -20,6 +21,9 @@ public sealed class CatalogDbContext : DbContext
     public DbSet<ItemImage> ItemImages => Set<ItemImage>();
     public DbSet<Tag> Tags => Set<Tag>();
     public DbSet<ItemTag> ItemTags => Set<ItemTag>();
+
+    // Лаба 8: ідемпотентність споживача подій (EventId уже оброблених integration events).
+    public DbSet<ProcessedEvent> ProcessedEvents => Set<ProcessedEvent>();
 
     // Усі IEntityTypeConfiguration<T> із цієї збірки підключаються централізовано.
     protected override void OnModelCreating(ModelBuilder modelBuilder)

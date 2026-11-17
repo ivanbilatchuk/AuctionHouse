@@ -46,6 +46,9 @@ public class Item
     public bool IsDeleted { get; private set; }
     public byte[] RowVersion { get; private set; } = null!;
 
+    // Лаба 8: час події Auctions, застосованої до статусу останньою (захист від out-of-order доставки).
+    public DateTime? AuctionStatusSyncedAt { get; private set; }
+
     public Category? Category { get; private set; }
     public ItemDetail? Detail { get; private set; }
     public IReadOnlyCollection<ItemImage> Images => _images;
@@ -128,6 +131,36 @@ public class Item
     public void MarkSold() => TransitionTo(ItemStatus.Sold, ItemStatus.InAuction);
 
     public void Withdraw() => TransitionTo(ItemStatus.Withdrawn, ItemStatus.Draft, ItemStatus.Listed, ItemStatus.InAuction);
+
+    // Лаба 8: проєкція статусу аукціону (власник — Auctions) на статус предмета за подією AuctionStatusChanged:
+    //   Active               -> InAuction (з Listed);
+    //   Closed               -> Sold      (з InAuction: переможця визначено);
+    //   Unsold / Cancelled   -> Listed    (з InAuction або Sold: торги не відбулися / продаж скасовано;
+    //                                      для предмета, що в торги не потрапляв, — без змін).
+    // Повертає false, якщо подія застаріла (старіша за вже застосовану) — її пропускають без змін.
+    // Неможливий перехід (наприклад, Active для предмета в Draft) — DomainException: постійний збій, повідомлення йде в DLQ.
+    public bool ApplyAuctionStatus(string auctionStatus, DateTime occurredAt)
+    {
+        if (AuctionStatusSyncedAt is { } syncedAt && occurredAt <= syncedAt)
+            return false;
+
+        var (target, allowedFrom) = auctionStatus switch
+        {
+            "Active" => (ItemStatus.InAuction, new[] { ItemStatus.Listed }),
+            "Closed" => (ItemStatus.Sold, new[] { ItemStatus.InAuction }),
+            "Unsold" or "Cancelled" => (ItemStatus.Listed, new[] { ItemStatus.InAuction, ItemStatus.Sold }),
+            _ => throw new DomainException($"Auction status '{auctionStatus}' is not projected to the catalog.")
+        };
+
+        // Аукціон скасовано / не відбувся, а предмет у торги й не потрапляв (Draft, Listed, Withdrawn) —
+        // повертати нічого: лише фіксуємо час синхронізації. Так само, якщо предмет уже в цільовому стані.
+        var rollbackWithoutEffect = target == ItemStatus.Listed && Status is not (ItemStatus.InAuction or ItemStatus.Sold);
+        if (Status != target && !rollbackWithoutEffect)
+            TransitionTo(target, allowedFrom);
+
+        AuctionStatusSyncedAt = occurredAt;
+        return true;
+    }
 
     public void EnsureCanBeDeleted()
     {

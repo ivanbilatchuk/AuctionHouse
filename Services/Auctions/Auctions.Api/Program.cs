@@ -2,14 +2,17 @@ using System.Reflection;
 using Auctions.Api.ExceptionHandling;
 using Auctions.Api.Grpc;
 using Auctions.Api.HealthChecks;
+using Auctions.Api.IntegrationEvents;
 using Auctions.Api.Metrics;
 using Auctions.Bll.Caching;
+using Auctions.Bll.IntegrationEvents;
 using Auctions.Bll.Mapping;
 using Auctions.Bll.Services;
 using Auctions.Bll.Validation;
 using Auctions.Dal.Interfaces;
 using Auctions.Dal.Uow;
 using Microsoft.OpenApi.Models;
+using Platform.EventBus;
 using Platform.ServiceDefaults;
 using Platform.ServiceDefaults.HealthChecks;
 
@@ -48,6 +51,13 @@ builder.Services.AddAuctionsHealthChecks(builder.Configuration);
 
 // Лаба 7: бізнес-метрики (Meter "Auctions.Api"), Singleton.
 builder.Services.AddSingleton<AuctionsMetrics>();
+
+// Лаба 8: RabbitMQ через Aspire.RabbitMQ.Client (рядок підключення "messaging"), IEventPublisher, health check брокера.
+// Публікує AuctionStatusChanged у auctions-events після коміту зміни статусу (AuctionService -> IAuctionsIntegrationEventService);
+// споживає ItemUpdated з catalog-events і оновлює копію Auction.ItemTitle (CatalogEventsConsumer: черга auctions.catalog-sync).
+builder.AddEventBus();
+builder.Services.AddScoped<IAuctionsIntegrationEventService, AuctionsIntegrationEventService>();
+builder.Services.AddHostedService<CatalogEventsConsumer>();
 
 builder.Services.AddScoped<IUnitOfWork>(sp =>
     new UnitOfWork(connectionString, sp.GetRequiredService<ILogger<UnitOfWork>>()));

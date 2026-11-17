@@ -1,4 +1,5 @@
 using Community.Domain.Entities;
+using Community.Infrastructure.Messaging;
 using Community.Infrastructure.Persistence;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
@@ -43,7 +44,14 @@ public sealed class MongoIndexInitializer(MongoDbContext context, ILogger<MongoI
                 new CreateIndexOptions { Name = "ix_itemId" })
         ], ct);
 
+        // Лаба 8: TTL — записи про оброблені події видаляються через 30 днів (повторна доставка настільки старої події неможлива).
+        await context.ProcessedEvents.Indexes.CreateOneAsync(
+            new CreateIndexModel<ProcessedEventDocument>(
+                Builders<ProcessedEventDocument>.IndexKeys.Ascending(e => e.ProcessedAt),
+                new CreateIndexOptions { Name = "ttl_processedAt", ExpireAfter = TimeSpan.FromDays(30) }),
+            cancellationToken: ct);
+
         logger.LogInformation("MongoDB indexes are ensured for {Collections}",
-            new[] { MongoDbContext.ExpertOpinionsCollection, MongoDbContext.DiscussionsCollection });
+            new[] { MongoDbContext.ExpertOpinionsCollection, MongoDbContext.DiscussionsCollection, MongoDbContext.ProcessedEventsCollection });
     }
 }

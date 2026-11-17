@@ -3,7 +3,9 @@ using Community.Infrastructure;
 using Community.WebApi;
 using Community.WebApi.Grpc;
 using Community.WebApi.HealthChecks;
+using Community.WebApi.IntegrationEvents;
 using Community.WebApi.Metrics;
+using Platform.EventBus;
 using Platform.ServiceDefaults;
 using Platform.ServiceDefaults.HealthChecks;
 
@@ -22,6 +24,12 @@ builder.Services.AddCommunityHealthChecks(builder.Configuration);
 
 // Лаба 7: бізнес-метрики (Meter "Community.WebApi"), Singleton.
 builder.Services.AddSingleton<CommunityMetrics>();
+
+// Лаба 8: RabbitMQ через Aspire.RabbitMQ.Client (рядок підключення "messaging"), health check брокера.
+// Споживає ItemUpdated з catalog-events і оновлює item.title у висновках та обговореннях (черга community.catalog-sync).
+// Consumer стартує після InitializeMongoAsync (hosted services запускаються в RunAsync) — індекс processedEvents уже є.
+builder.AddEventBus();
+builder.Services.AddHostedService<CatalogEventsConsumer>();
 
 // Лаба 6: дворівневий кеш. L1 — IMemoryCache з лімітом записів (кожен запис має Size = 1),
 // L2 — Redis через IDistributedCache (рядок підключення "redis" від Aspire або з appsettings.json).
