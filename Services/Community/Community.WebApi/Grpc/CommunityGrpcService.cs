@@ -5,11 +5,14 @@ using Grpc.Core;
 using MediatR;
 using MongoDB.Driver;
 using ValidationException = Community.Application.Common.ValidationException;
+using Platform.ServiceDefaults.Security;
 
 namespace Community.WebApi.Grpc;
 
 // Тонкий адаптер gRPC над MediatR: той самий GetExpertOpinionsQuery, що й REST, тож працюють
 // валідація, логування й кешування (CachingBehavior). Очікувані помилки -> InvalidArgument / Unavailable.
+// Лаба 9: внутрішні gRPC-виклики Aggregator-а теж авторизуються — токен Client Credentials (IdentityServer) зі scope community:read.
+[RequirePermission(Permissions.Community.Read)]
 public sealed class CommunityGrpcService(ISender sender) : CommunityService.CommunityServiceBase
 {
     private const int DefaultPageSize = 20;

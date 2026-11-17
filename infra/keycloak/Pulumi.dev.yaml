@@ -1,0 +1,12 @@
+# Стек розробки. Секрети задаються командами (значення шифруються Pulumi, у репозиторій не потрапляють у відкритому вигляді):
+#   pulumi config set --secret keycloak:password <пароль адміністратора Keycloak = параметр keycloak-admin-password AppHost>
+#   pulumi config set --secret testUserPassword <тимчасовий пароль тестових користувачів>
+config:
+  auctionhouse-keycloak:realmName: AuctionHouse
+  auctionhouse-keycloak:temporaryPasswords: "true"
+  auctionhouse-keycloak:swaggerOrigins: http://localhost:5180,http://localhost:5280,http://localhost:5380,http://localhost:5580
+  auctionhouse-keycloak:testUserPassword:
+    secure: v1:Y5qSlY2YOjiKcxOw:Ncjg5hqXpM9Q0ykSUy4rDCywRh8KEK/ZVVAOBQ==
+  keycloak:password:
+    secure: v1:MEhJham5pt4jkmSb:UlK4l/dhwri8mxzFbFMKXXWPXAUtFFpPCJWdxgBc4H4=
+encryptionsalt: v1:1uLOEEkf/ZU=:v1:EiKngT+vzUj/vHQI:I8R42P0XZ4/lgq3n94aasW4doB0rOw==

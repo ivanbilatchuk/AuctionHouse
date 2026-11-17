@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.Dto;
@@ -6,7 +7,9 @@ using Platform.Aggregator.Services;
 namespace Platform.Aggregator.Controllers;
 
 /// <summary>Композитні відповіді для клієнта: дані кількох сервісів в одному запиті.</summary>
+// Лаба 9: картка доступна будь-якому автентифікованому користувачу; до сервісів Aggregator іде вже зі СВОЇМ токеном (Client Credentials).
 [ApiController]
+[Authorize]
 [Route("api/aggregator/auctions")]
 [Produces("application/json")]
 public sealed class AuctionCardsController(AuctionCardService cardService, ILogger<AuctionCardsController> logger) : ControllerBase

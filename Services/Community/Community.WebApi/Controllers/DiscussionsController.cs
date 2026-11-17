@@ -7,6 +7,7 @@ using Community.WebApi.Contracts;
 using Community.WebApi.Metrics;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Community.WebApi.Controllers;
 
@@ -17,6 +18,7 @@ namespace Community.WebApi.Controllers;
 public sealed class DiscussionsController(ISender sender, IMapper mapper, CommunityMetrics metrics) : ControllerBase
 {
     /// <summary>Обговорення з усіма коментарями й відповідями (один документ).</summary>
+    [RequirePermission(Permissions.Community.Read)]
     [HttpGet("{id}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -25,6 +27,7 @@ public sealed class DiscussionsController(ISender sender, IMapper mapper, Commun
         => Ok(await sender.Send(new GetDiscussionByIdQuery(id), ct));
 
     /// <summary>Створює обговорення аукціону (одне на аукціон).</summary>
+    [RequirePermission(Permissions.Community.Write)]
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -38,6 +41,7 @@ public sealed class DiscussionsController(ISender sender, IMapper mapper, Commun
     }
 
     /// <summary>Додає коментар або (з parentCommentId) відповідь на коментар.</summary>
+    [RequirePermission(Permissions.Community.Write)]
     [HttpPost("{id}/comments")]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]

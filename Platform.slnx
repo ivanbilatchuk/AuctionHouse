@@ -4,6 +4,7 @@
     <Project Path="Platform.ApiGateway/Platform.ApiGateway.csproj" />
     <Project Path="Platform.AppHost/Platform.AppHost.csproj" />
     <Project Path="Platform.EventBus/Platform.EventBus.csproj" />
+    <Project Path="Platform.IdentityServer/Platform.IdentityServer.csproj" />
     <Project Path="Platform.ServiceDefaults/Platform.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/Services/" />
@@ -12,6 +13,9 @@
     <Project Path="Services/Auctions/Auctions.Bll/Auctions.Bll.csproj" />
     <Project Path="Services/Auctions/Auctions.Dal/Auctions.Dal.csproj" />
     <Project Path="Services/Auctions/Auctions.Domain/Auctions.Domain.csproj" />
+  </Folder>
+  <Folder Name="/Services/Auth/">
+    <Project Path="Services/Auth/Auth.Api/Auth.Api.csproj" />
   </Folder>
   <Folder Name="/Services/Catalog/">
     <Project Path="Services/Catalog/Catalog.Api/Catalog.Api.csproj" />
@@ -25,5 +29,8 @@
     <Project Path="Services/Community/Community.Domain/Community.Domain.csproj" />
     <Project Path="Services/Community/Community.Infrastructure/Community.Infrastructure.csproj" />
     <Project Path="Services/Community/Community.WebApi/Community.WebApi.csproj" />
+  </Folder>
+  <Folder Name="/Services/Payments/">
+    <Project Path="Services/Payments/Payments.Api/Payments.Api.csproj" />
   </Folder>
 </Solution>

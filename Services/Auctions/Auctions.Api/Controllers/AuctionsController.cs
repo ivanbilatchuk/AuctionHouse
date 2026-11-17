@@ -2,6 +2,7 @@ using Auctions.Api.Metrics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Auctions.Api.Controllers;
 
@@ -21,6 +22,7 @@ public class AuctionsController : ControllerBase
     }
 
     /// <summary>Список аукціонів (необов'язковий фільтр за статусом).</summary>
+    [RequirePermission(Permissions.Auctions.Read)]
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<AuctionSummaryDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -30,6 +32,7 @@ public class AuctionsController : ControllerBase
         Ok(await _auctionService.GetAllAsync(status, cancellationToken));
 
     /// <summary>Аукціон за ідентифікатором разом із параметрами торгів.</summary>
+    [RequirePermission(Permissions.Auctions.Read)]
     [HttpGet("{id:long}")]
     [ProducesResponseType<AuctionDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -37,6 +40,7 @@ public class AuctionsController : ControllerBase
         Ok(await _auctionService.GetByIdAsync(id, cancellationToken));
 
     /// <summary>Створює аукціон у статусі Draft.</summary>
+    [RequirePermission(Permissions.Auctions.Create)]
     [HttpPost]
     [ProducesResponseType<AuctionDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -50,6 +54,7 @@ public class AuctionsController : ControllerBase
     }
 
     /// <summary>Редагує аукціон (лише Draft/Scheduled без ставок). RowVersion береться з GET.</summary>
+    [RequirePermission(Permissions.Auctions.Update)]
     [HttpPut("{id:long}")]
     [ProducesResponseType<AuctionDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -59,6 +64,7 @@ public class AuctionsController : ControllerBase
         Ok(await _auctionService.UpdateAsync(id, dto, cancellationToken));
 
     /// <summary>Змінює статус аукціону за матрицею дозволених переходів (збережена процедура).</summary>
+    [RequirePermission(Permissions.Auctions.Approve)]
     [HttpPost("{id:long}/status")]
     [ProducesResponseType<AuctionDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -76,6 +82,7 @@ public class AuctionsController : ControllerBase
     }
 
     /// <summary>М'яко видаляє аукціон (лише Draft/Cancelled без ставок).</summary>
+    [RequirePermission(Permissions.Auctions.Delete)]
     [HttpDelete("{id:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]

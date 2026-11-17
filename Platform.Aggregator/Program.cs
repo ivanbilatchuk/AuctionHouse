@@ -8,14 +8,46 @@ using Platform.Aggregator.Caching;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.HealthChecks;
 using Platform.Aggregator.Resilience;
+using Platform.Aggregator.Security;
 using Platform.Aggregator.Services;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Duende.AccessTokenManagement;
 using Platform.ServiceDefaults;
+using Platform.ServiceDefaults.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Serilog, OpenTelemetry, health checks, service discovery, стійкість і X-Correlation-Id для HttpClient (Platform.ServiceDefaults).
 builder.AddServiceDefaults();
+
+// Лаба 9, Частина 2: Client Credentials Flow (сервіс-до-сервісу). Aggregator сам отримує access token у IdentityServer
+// (client "aggregator_service", лише scopes *:read) і додає його до кожного HTTP- і gRPC-виклику сервісів.
+// Токен кешується до закінчення терміну дії (Duende.AccessTokenManagement); user context у ньому немає — лише ідентичність сервісу.
+var identityServerAuthority = (builder.Configuration["Authentication:IdentityServer:Authority"] ?? "http://localhost:5700").TrimEnd('/');
+var serviceTokenClient = ServiceTokenWarmup.ClientName;
+builder.Services.AddClientCredentialsTokenManagement()
+    .AddClient(serviceTokenClient, client =>
+    {
+        client.TokenEndpoint = new Uri($"{identityServerAuthority}/connect/token");
+        client.ClientId = ClientId.Parse(builder.Configuration["Authentication:IdentityServer:ClientId"] ?? "aggregator_service");
+        client.ClientSecret = ClientSecret.Parse(builder.Configuration["Authentication:IdentityServer:ClientSecret"]
+            ?? throw new InvalidOperationException("Authentication:IdentityServer:ClientSecret is not configured."));
+        client.Scope = Scope.Parse($"{Permissions.Auctions.Read} {Permissions.Catalog.Read} {Permissions.Community.Read}");
+    });
+builder.Services.AddHostedService<ServiceTokenWarmup>();
+
+// Вхідні запити (від Gateway): токен будь-якого з трьох IdP; аудиторію не перевіряємо — Aggregator не є Resource Server-ом.
+builder.Services.AddAuthentication(PlatformAuthentication.Scheme)
+    .AddPlatformSchemeSelector(builder.Configuration)
+    .AddJwtBearer(PlatformAuthentication.AuthServiceScheme, options => options.ConfigureAuthServiceTokens(builder.Configuration))
+    .AddJwtBearer(PlatformAuthentication.IdentityServerScheme, options =>
+        options.ConfigureIdentityServerTokens(builder.Configuration, builder.Environment, audience: null))
+    .AddKeycloakJwtBearer(
+        serviceName: PlatformAuthentication.KeycloakServiceName,
+        realm: PlatformAuthentication.KeycloakRealm,
+        authenticationScheme: PlatformAuthentication.KeycloakScheme,
+        configureOptions: options => options.ConfigureKeycloakTokens(builder.Environment, audience: null));
+builder.Services.AddAuthorization();
 
 builder.Services.AddOptions<AggregatorOptions>().Bind(builder.Configuration.GetSection(AggregatorOptions.SectionName));
 
@@ -28,11 +60,14 @@ var nonCritical = ServiceResilienceProfile.NonCritical;
 // Типізовані клієнти; "https+http://" — спершу https-ендпоінт ресурсу, інакше http.
 // Стандартний обробник із ServiceDefaults прибирається (RemoveAllResilienceHandlers) і замінюється власним — без нашарування.
 builder.Services.AddHttpClient<AuctionsClient>(client => client.BaseAddress = new("https+http://auctions-api"))
-    .AddServiceResilience(critical);
+    .AddServiceResilience(critical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 builder.Services.AddHttpClient<CatalogClient>(client => client.BaseAddress = new("https+http://catalog-api"))
-    .AddServiceResilience(critical);
+    .AddServiceResilience(critical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 builder.Services.AddHttpClient<CommunityClient>(client => client.BaseAddress = new("https+http://community-api"))
-    .AddServiceResilience(nonCritical);
+    .AddServiceResilience(nonCritical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 
 // gRPC-клієнти: логічні адреси "http://_grpc.<ресурс>" — ендпоінт "grpc" (HTTP/2 без TLS) кожного сервісу,
 // який розв'язує service discovery. Resilience, service discovery і CorrelationIdHandler застосовуються
@@ -41,13 +76,16 @@ builder.Services.AddHttpClient<CommunityClient>(client => client.BaseAddress = n
 // і retry-політика gRPC-каналу за статусами Unavailable / ResourceExhausted.
 builder.Services.AddGrpcClient<AuctionsService.AuctionsServiceClient>(o => o.Address = new Uri("http://_grpc.auctions-api"))
     .AddServiceResilience(critical)
-    .AddGrpcRetryPolicy(critical);
+    .AddGrpcRetryPolicy(critical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 builder.Services.AddGrpcClient<CatalogService.CatalogServiceClient>(o => o.Address = new Uri("http://_grpc.catalog-api"))
     .AddServiceResilience(critical)
-    .AddGrpcRetryPolicy(critical);
+    .AddGrpcRetryPolicy(critical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 builder.Services.AddGrpcClient<CommunityService.CommunityServiceClient>(o => o.Address = new Uri("http://_grpc.community-api"))
     .AddServiceResilience(nonCritical)
-    .AddGrpcRetryPolicy(nonCritical);
+    .AddGrpcRetryPolicy(nonCritical)
+    .AddClientCredentialsTokenHandler(serviceTokenClient);
 
 builder.Services.AddScoped<GrpcCardDataSource>();
 builder.Services.AddScoped<HttpCardDataSource>();
@@ -111,6 +149,9 @@ app.UseStatusCodePages();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 app.MapDefaultEndpoints();

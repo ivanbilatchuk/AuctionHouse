@@ -1,6 +1,7 @@
 using Catalog.Bll.DTO;
 using Catalog.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Catalog.Api.Controllers;
 
@@ -11,6 +12,7 @@ namespace Catalog.Api.Controllers;
 public sealed class TagsController(ITagService service) : ControllerBase
 {
     /// <summary>Усі теги.</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<TagDto>>> GetAll(CancellationToken ct)
@@ -20,6 +22,7 @@ public sealed class TagsController(ITagService service) : ControllerBase
     /// <param name="slug">Slug тега, наприклад rare.</param>
     /// <param name="since">Нижня межа AddedAt (UTC); за замовчуванням останні 30 днів.</param>
     /// <param name="ct">Токен скасування.</param>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet("{slug}/items")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

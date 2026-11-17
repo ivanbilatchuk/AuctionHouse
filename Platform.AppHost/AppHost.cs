@@ -27,6 +27,49 @@ var messaging = builder.AddRabbitMQ("messaging")
     .WithDataVolume()
     .WithManagementPlugin();
 
+// ---------------- Лаба 9: Identity Provider-и ----------------
+// Ключ підпису токенів Auth Service (HS256): генерується один раз і зберігається в user-secrets AppHost.
+// Отримують його Auth Service (підписує) і всі сервіси / Gateway (валідують локально).
+var jwtSigningKey = builder.AddParameter("jwt-signing-key",
+    new GenerateParameterDefault { MinLength = 64, Special = false }, secret: true, persist: true);
+
+// Окремий SQL Server для даних безпеки: IdentityDb (Частина 1, Auth Service) і IdentityServerDb (Частина 2) —
+// ізольовані від бізнес-баз (sql). Компрометація бізнес-бази не відкриває доступу до облікових записів і ключів.
+var identitySql = builder.AddSqlServer("identity-sql", sqlPassword)
+    .WithDataVolume();
+var identityDb = identitySql.AddDatabase("IdentityDb", "AuctionHouse_Identity");
+var identityServerDb = identitySql.AddDatabase("IdentityServerDb", "AuctionHouse_IdentityServer");
+
+// Частина 1: Auth Service (ASP.NET Identity + JWT, http://localhost:5680). Через Gateway: /auth/**, /users/**.
+var authApi = builder.AddProject<Projects.Auth_Api>("auth-api", launchProfileName: "http")
+    .WithReference(identityDb)
+    .WaitFor(identityDb)
+    .WithEnvironment("Authentication__AuthService__SigningKey", jwtSigningKey)
+    .WithHttpHealthCheck("/health/ready");
+
+// Частина 2: Duende IdentityServer (http://localhost:5700) — Authorization Code (Postman, Swagger) і Client Credentials (Aggregator).
+var identityServer = builder.AddProject<Projects.Platform_IdentityServer>("identityserver", launchProfileName: "http")
+    .WithReference(identityServerDb)
+    .WaitFor(identityServerDb)
+    .WithHttpHealthCheck("/health/ready");
+// Issuer (http://localhost:5700) задано в appsettings.json IdentityServer: посилання ресурсу на власний endpoint
+// через WithEnvironment блокує його створення (Aspire чекає на endpoint, який ще не виділено).
+var identityServerUrl = identityServer.GetEndpoint("http");
+
+// Частина 3 (траєкторія Б): Keycloak через Aspire-інтеграцію, http://localhost:8080 (Admin Console, логін admin).
+// WithDataVolume — realm, клієнти й користувачі (створені `pulumi up` з infra/keycloak) переживають перезапуск.
+var keycloakAdminPassword = builder.AddParameter("keycloak-admin-password",
+    new GenerateParameterDefault { MinLength = 16, Special = false }, secret: true, persist: true);
+var keycloak = builder.AddKeycloak("keycloak", 8080, adminPassword: keycloakAdminPassword)
+    .WithDataVolume();
+
+// Спільні налаштування автентифікації для мікросервісів, Aggregator-а і Gateway: ключ Auth Service, Authority IdentityServer,
+// посилання на Keycloak (AddKeycloakJwtBearer знаходить його через service discovery).
+IResourceBuilder<ProjectResource> WithPlatformAuth(IResourceBuilder<ProjectResource> project) => project
+    .WithEnvironment("Authentication__AuthService__SigningKey", jwtSigningKey)
+    .WithEnvironment("Authentication__IdentityServer__Authority", identityServerUrl)
+    .WithReference(keycloak);
+
 var scriptsDirectory = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "db", "p1"));
 builder.Eventing.Subscribe<ResourceReadyEvent>(auctionsDb.Resource, async (@event, cancellationToken) =>
 {
@@ -52,6 +95,7 @@ var auctionsApi = builder.AddProject<Projects.Auctions_Api>("auctions-api", laun
     .WithReference(messaging)
     .WaitFor(messaging)
     .WithHttpHealthCheck("/health/ready", endpointName: "http");
+WithPlatformAuth(auctionsApi);
 
 // Catalog: схему створюють EF Core-міграції (MigrateAsync під час старту API), скрипти не потрібні.
 var catalogApi = builder.AddProject<Projects.Catalog_Api>("catalog-api", launchProfileName: "http")
@@ -62,6 +106,7 @@ var catalogApi = builder.AddProject<Projects.Catalog_Api>("catalog-api", launchP
     .WithReference(messaging)
     .WaitFor(messaging)
     .WithHttpHealthCheck("/health/ready", endpointName: "http");
+WithPlatformAuth(catalogApi);
 
 // Community: MongoDB; індекси й сідінг створює сам сервіс під час старту.
 var communityApi = builder.AddProject<Projects.Community_WebApi>("community-api", launchProfileName: "http")
@@ -72,6 +117,12 @@ var communityApi = builder.AddProject<Projects.Community_WebApi>("community-api"
     .WithReference(messaging)
     .WaitFor(messaging)
     .WithHttpHealthCheck("/health/ready", endpointName: "http");
+WithPlatformAuth(communityApi);
+
+// Лаба 9: демо-сервіс платежів (http://localhost:5580) — перевірка доступу: payments:* має лише admin.
+var paymentsApi = builder.AddProject<Projects.Payments_Api>("payments-api", launchProfileName: "http")
+    .WithHttpHealthCheck("/health/ready");
+WithPlatformAuth(paymentsApi);
 
 // Агрегатор: сервіси -> aggregator (адреси сервісів, у т. ч. _grpc-ендпоінти, — через service discovery).
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
@@ -79,15 +130,21 @@ var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(auctionsApi).WaitFor(auctionsApi)
     .WithReference(catalogApi).WaitFor(catalogApi)
     .WithReference(communityApi).WaitFor(communityApi)
+    // Лаба 9: токен Client Credentials для викликів сервісів — від IdentityServer.
+    .WithReference(identityServer).WaitFor(identityServer)
     .WithHttpHealthCheck("/health/ready");
+WithPlatformAuth(aggregator);
 
 // Gateway — єдина точка входу на фіксованому порту http://localhost:5000.
-builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
+var gateway = builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
     .WithHttpEndpoint(port: 5000, name: "public")
     .WithReference(auctionsApi).WaitFor(auctionsApi)
     .WithReference(catalogApi).WaitFor(catalogApi)
     .WithReference(communityApi).WaitFor(communityApi)
     .WithReference(aggregator).WaitFor(aggregator)
+    .WithReference(authApi).WaitFor(authApi)
+    .WithReference(paymentsApi).WaitFor(paymentsApi)
     .WithHttpHealthCheck("/health/ready");
+WithPlatformAuth(gateway);
 
 builder.Build().Run();

@@ -3,6 +3,7 @@ using Catalog.Bll.DTO;
 using Catalog.Bll.Services;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Catalog.Api.Controllers;
 
@@ -14,6 +15,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
 {
     /// <summary>Сторінка лотів. Фільтрація, сортування й Skip/Take виконуються в SQL.</summary>
     /// <remarks>Метадані сторінки повертаються в тілі (totalCount, totalPages, hasNext, hasPrevious) і в заголовках X-Total-Count / X-Total-Pages.</remarks>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -32,6 +34,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Лоти продавця (друга специфікація через той самий WithSpecification()).</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet("by-seller/{sellerId:guid}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<ActionResult<PagedResult<ItemDto>>> GetBySeller(Guid sellerId, [FromQuery] PageRequest request, CancellationToken ct)
@@ -42,6 +45,22 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Картка лота з деталями, зображеннями й тегами (Eager Loading, один SQL-запит).</summary>
+    /// <summary>Лоти поточного користувача (продавець = claim "sub" токена). Токен сервісу (без sub) — 403.</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
+    [HttpGet("mine")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<PagedResult<ItemDto>>> GetMine([FromQuery] PageRequest request, CancellationToken ct)
+    {
+        if (User.GetUserGuid() is not { } userId)
+            return Forbid();
+
+        var page = await service.GetBySellerAsync(userId, request, ct);
+        PaginationHeaders.Write(Response, page);
+        return Ok(page);
+    }
+
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet("{id:long}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -49,6 +68,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
         => Ok(await service.GetByIdAsync(id, ct));
 
     /// <summary>Створює лот. Повторний SKU або slug дає 409.</summary>
+    [RequirePermission(Permissions.Catalog.Create)]
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -58,6 +78,10 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
         [FromServices] IValidator<CreateItemDto> validator,
         CancellationToken ct)
     {
+        // Лаба 9: claims у бізнес-логіці — продавцем стає автентифікований користувач (sub), якщо продавця не вказано явно.
+        if (input.SellerExternalId == Guid.Empty && User.GetUserGuid() is { } userId)
+            input.SellerExternalId = userId;
+
         var validation = await validator.ValidateAsync(input, ct);
         if (!validation.IsValid)
             return ValidationProblem(validation.AddTo(ModelState));
@@ -68,6 +92,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Оновлює назву, slug, категорію та естімейт (лише Draft / Listed).</summary>
+    [RequirePermission(Permissions.Catalog.Update)]
     [HttpPut("{id:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -89,6 +114,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Змінює статус лота за правилами переходів доменної сутності.</summary>
+    [RequirePermission(Permissions.Catalog.Publish)]
     [HttpPost("{id:long}/status")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -110,6 +136,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Призначає тег лоту (рядок у проміжній таблиці ItemTag з AddedAt).</summary>
+    [RequirePermission(Permissions.Catalog.Update)]
     [HttpPut("{id:long}/tags/{tagId:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -121,6 +148,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>Знімає тег із лота.</summary>
+    [RequirePermission(Permissions.Catalog.Update)]
     [HttpDelete("{id:long}/tags/{tagId:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -132,6 +160,7 @@ public sealed class ItemsController(IItemService service, CatalogMetrics metrics
     }
 
     /// <summary>М'яко видаляє лот (IsDeleted = 1).</summary>
+    [RequirePermission(Permissions.Catalog.Delete)]
     [HttpDelete("{id:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

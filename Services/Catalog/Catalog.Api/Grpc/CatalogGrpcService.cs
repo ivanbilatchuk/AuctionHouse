@@ -4,11 +4,14 @@ using Catalog.Bll.Services;
 using Catalog.Domain.Exceptions;
 using Catalog.Grpc;
 using Grpc.Core;
+using Platform.ServiceDefaults.Security;
 
 namespace Catalog.Api.Grpc;
 
 // Тонкий адаптер gRPC над IItemService (кешуючий декоратор: повторні читання йдуть з L1/L2).
 // Очікувані помилки -> InvalidArgument / NotFound, а не Internal.
+// Лаба 9: внутрішні gRPC-виклики Aggregator-а теж авторизуються — токен Client Credentials (IdentityServer) зі scope catalog:read.
+[RequirePermission(Permissions.Catalog.Read)]
 public sealed class CatalogGrpcService(IItemService items) : CatalogService.CatalogServiceBase
 {
     private const int MaxBatchSize = 100;
