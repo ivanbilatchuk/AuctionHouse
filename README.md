@@ -16,7 +16,8 @@ AuctionHouse/
 │   ├── contexts.md           домен, контексти, політика дублювання, посилання без FK
 │   ├── erd-p1-auctions.md    ERD проєкту №1
 │   ├── erd-p2-catalog.md     ERD проєкту №2
-│   └── p3-mongodb.md         колекції, приклади документів, запити
+│   ├── p3-mongodb.md         колекції, приклади документів, запити
+│   └── postman/              колекція Postman Лаби 9 (усі flows і матриця дозволів)
 ├── db/
 │   ├── p1/          (Auctions)  schema.sql · procedures.sql · seed.sql · verify.sql
 │   ├── p2/          (Catalog)   schema.sql · seed.sql
@@ -26,11 +27,13 @@ AuctionHouse/
 │   ├── deploy.ps1               розгортання всіх трьох баз (Windows)
 │   └── deploy.sh                те саме для Linux/macOS
 ├── Platform.slnx                одне рішення на всю платформу
-├── Platform.AppHost/            .NET Aspire AppHost: SQL Server + MongoDB + Redis + RabbitMQ + 3 сервіси + Aggregator + API Gateway
+├── Platform.AppHost/            .NET Aspire AppHost: SQL Server ×2 + MongoDB + Redis + RabbitMQ + Keycloak + сервіси + Aggregator + API Gateway
 ├── Platform.ServiceDefaults/    спільні Serilog, OpenTelemetry, health checks, service discovery, CorrelationId (Лаба 5)
 ├── Platform.ApiGateway/         YARP: єдина точка входу http://localhost:5000 (Лаба 5)
 ├── Platform.Aggregator/         композитна картка аукціону з трьох сервісів (Лаба 5)
 ├── Platform.EventBus/           RabbitMQ: підключення, топологія, publisher, consumer, retry/DLQ, трасування (Лаба 8)
+├── Platform.IdentityServer/     Duende IdentityServer: clients, scopes, Quickstart UI, EF-сховища (Лаба 9)
+├── infra/keycloak/              Pulumi (C#): realm, resource servers, ролі, permissions, clients, users (Лаба 9)
 └── Services/
     ├── Auctions/                Проєкт №1 — ADO.NET + Dapper (Лаба 2)
     ├── Catalog/                 Проєкт №2 — EF Core (Лаба 3)
@@ -39,11 +42,13 @@ AuctionHouse/
     │   ├── Catalog.Dal/         CatalogDbContext, Configurations/, Migrations/, Repositories/, UnitOfWork/, Seeding/
     │   ├── Catalog.Domain/      сутності, доменні винятки
     │   └── Catalog.Tests/       модульні тести (xUnit)
-    └── Community/               Проєкт №3 — Clean Architecture + CQRS + MongoDB (Лаба 4)
-        ├── Community.Domain/         сутності, value objects, інтерфейси репозиторіїв
-        ├── Community.Application/    Commands/, Queries/, Behaviors/, Caching/
-        ├── Community.Infrastructure/ Mongo-контекст, BSON-мапінг, репозиторії, індекси, сідінг
-        └── Community.WebApi/         контролери, Program.cs, обробка помилок
+    ├── Community/               Проєкт №3 — Clean Architecture + CQRS + MongoDB (Лаба 4)
+    │   ├── Community.Domain/         сутності, value objects, інтерфейси репозиторіїв
+    │   ├── Community.Application/    Commands/, Queries/, Behaviors/, Caching/
+    │   ├── Community.Infrastructure/ Mongo-контекст, BSON-мапінг, репозиторії, індекси, сідінг
+    │   └── Community.WebApi/         контролери, Program.cs, обробка помилок
+    ├── Auth/Auth.Api/           ASP.NET Identity + JWT: /auth/*, /users/*, Migrations/ (Лаба 9)
+    └── Payments/Payments.Api/   демо-сервіс платежів для перевірки доступу (Лаба 9)
 ```
 
 ## Швидкий старт / Запуск платформи
@@ -93,6 +98,7 @@ curl -s -i "$GW/api/aggregator/auctions/1/full?transport=http&noCache=true"   # 
 15. [Лабораторна 6 — gRPC і дворівневе кешування](#15-лабораторна-6--grpc-і-дворівневе-кешування)
 16. [Лабораторна 7 — Resilience (Polly), бізнес-метрики та Health Checks](#16-лабораторна-7--resilience-polly-бізнес-метрики-та-health-checks)
 17. [Лабораторна 8 — Подієва архітектура з RabbitMQ](#17-лабораторна-8--подієва-архітектура-з-rabbitmq)
+18. [Лабораторна 9 — Аутентифікація та авторизація](#18-лабораторна-9--аутентифікація-та-авторизація)
 
 ---
 
@@ -1847,3 +1853,178 @@ curl http://localhost:5280/api/items/<itemId>
 | 11 | Повтори з лічильником x-retry-count і максимумом | `RabbitMqConsumerBase.cs` (`RetryOrDeadLetterAsync`, `MaxRetryAttempts = 3`), `RabbitMq/MessageHeaders.cs` |
 | 12 | Передача контексту трасування через брокер | `Platform.EventBus/Diagnostics/TracePropagation.cs`, `Platform.ServiceDefaults/Extensions.cs` (`AddSource("Platform.Messaging")`, `AddMeter("Platform.EventBus")`) |
 | 13 | Структуроване логування збоїв з бізнес-контекстом | `RabbitMqConsumerBase.cs` (log scope, Error / Warning з EventType, MessageId, CorrelationId), обробники в `<Сервіс>.Api/IntegrationEvents/EventHandling/` |
+
+
+## 18. Лабораторна 9 — Аутентифікація та авторизація
+
+Платформа приймає токени **трьох Identity Provider-ів** одночасно. Це прогресія складності, а не вибір одного:
+
+| Частина | Identity Provider | Де | Flows |
+|---|---|---|---|
+| 1 | **Auth Service** (ASP.NET Identity + JWT) | `Services/Auth/Auth.Api`, http://localhost:5680 | власні `/auth/*`, `/users/*` |
+| 2 | **Duende IdentityServer** (OAuth 2.0 / OIDC) | `Platform.IdentityServer`, http://localhost:5700 | Authorization Code + PKCE, Client Credentials |
+| 3 | **Keycloak** (Aspire) + **Pulumi** | AppHost (`AddKeycloak`), `infra/keycloak`, http://localhost:8080 | Authorization Code, Client Credentials, RPT з `authorization.permissions` |
+
+Відповідність методичці: orders-api → **auctions-api** (Проєкт №1), products-api → **catalog-api** (Проєкт №2), payments-api → **payments-api** (новий демо-сервіс `Services/Payments/Payments.Api`, http://localhost:5580). community-api — додатковий Resource Server.
+
+### 18.1 Запуск
+
+```bash
+dotnet run --project Platform.AppHost        # як і раніше; тепер ще identity-sql, auth-api, identityserver, payments-api, keycloak
+```
+
+Секрети генерує AppHost і зберігає в user-secrets (`dotnet user-secrets list --project Platform.AppHost`):
+- `Parameters:jwt-signing-key` — HS256-ключ Auth Service;
+- `Parameters:keycloak-admin-password` — пароль `admin` для Keycloak Admin Console і для Pulumi.
+
+Облікові записи для розробки:
+
+| Де | Логін | Пароль |
+|---|---|---|
+| Auth Service | `admin@auctionhouse.local` (ролі Admin, User) | `Admin#2026dev` (`appsettings.Development.json`) |
+| IdentityServer | `alice` (Admin), `bob` (User) | `Pass123$` |
+| Keycloak (після `pulumi up`) | `anna.admin`, `max.manager`, `ulyana.user`, `gena.guest` | `testUserPassword` зі стеку, **тимчасовий** |
+
+**Keycloak через Pulumi** (потрібні [Pulumi CLI](https://www.pulumi.com/docs/install/) і запущений AppHost):
+
+```bash
+cd infra/keycloak
+pulumi login --local                              # стан у ~/.pulumi, без облікового запису
+pulumi stack init dev                             # один раз
+pulumi config set --secret keycloak:password "<Parameters:keycloak-admin-password з user-secrets AppHost>"
+pulumi config set --secret testUserPassword "Start#2026kc"
+pulumi preview                                    # realm, 4 resource servers, scopes, ролі, політики, permissions, 3 clients, 4 users
+pulumi up
+pulumi stack output                               # RealmUrl, AdminConsoleUrl, TokenEndpoint, ClientIds, ResourceServerIds, TestUsers
+pulumi stack output ClientSecrets --show-secrets
+pulumi destroy                                    # прибрати після демонстрації
+```
+
+### 18.2 Частина 1 — Auth Service (ASP.NET Identity + JWT)
+
+- **База.** `IdentityDb` (`AuctionHouse_Identity`) на **окремому** SQL Server `identity-sql` в AppHost, ізольована від бізнес-баз. Міграція `Auth.Api/Migrations/*_InitialIdentity` створює `AspNetUsers`, `AspNetRoles`, `AspNetUserRoles`, `AspNetUserClaims`, `AspNetUserTokens`… і `RefreshTokens`. Застосовується під час старту разом зі створенням ролей **User** і **Admin** (`Services/IdentitySeeder.cs`).
+- **Identity** (`Program.cs`): пароль ≥ 8 символів, цифра, великі й малі літери, спецсимвол; lockout після 5 невдалих спроб на 15 хв; унікальний email; `RequireConfirmedEmail`.
+- **Токени** (`Services/JwtTokenService.cs`, `RefreshTokenService.cs`):
+  - access — **15 хв**, HS256, claims `sub`, `unique_name`, `email`, `role`, `jti`;
+  - refresh — **7 днів**, 64 випадкові байти, у БД лише SHA-256 хеш, `CreatedAt` / `ExpiresAt` / `RevokedAt` / `ReplacedByTokenHash`.
+- **Ротація.** `/auth/refresh-token` відкликає старий refresh і видає новий. Повторне пред'явлення вже відкликаного токена означає ймовірну крадіжку: відкликаються **всі** активні токени користувача.
+- **Refresh token передається лише в cookie** `refresh_token` з прапорцями `HttpOnly`, `SameSite=Strict`, `Path=/auth`. Access token повертається в тілі відповіді.
+- **Endpoints** (`Controllers/AuthController.cs`, `UsersController.cs`): усі з таблиці 2 методички. Admin-endpoints мають `[Authorize(Roles = "Admin")]`. Owner-endpoints порівнюють `sub` з `{id}` або пускають Admin.
+- **Email** — mock (`DevelopmentEmailSender`): лист пишеться в лог і в `GET /auth/dev/outbox` (лише Development). Токени підтвердження і скидання пароля одноразові (security stamp) і діють 2 год. Після скидання пароля відкликаються всі refresh-токени.
+
+### 18.3 Частина 2 — Duende IdentityServer
+
+- `Platform.IdentityServer`: `AddIdentityServer().AddConfigurationStore().AddOperationalStore().AddAspNetIdentity<ApplicationUser>()`. Окрема база `IdentityServerDb` на тому ж `identity-sql`. Три контексти мають власні міграції в `Data/Migrations/{PersistedGrantDb,ConfigurationDb,ApplicationDb}`. UI — Quickstart UI з шаблону Duende (Razor Pages: Login, Logout, Consent, Grants, Device, Diagnostics).
+- `Config.cs` синхронізується в БД під час старту:
+  - **ApiScopes** = дозволи платформи (`auctions:read`, `catalog:publish`, …);
+  - **ApiResources** = `auctions_api`, `catalog_api`, `community_api`, `payments_api` (аудиторія токена);
+  - **IdentityResources** `openid`, `profile`, `email`.
+- **Клієнти:**
+
+| Client | Flow | Особливості |
+|---|---|---|
+| `postman` | Authorization Code + PKCE | confidential (`postman_secret`), redirect `https://oauth.pstmn.io/v1/callback`, offline_access |
+| `aggregator_service` | Client Credentials | лише `auctions:read catalog:read community:read`; у токені немає `sub` |
+| `swagger` | Authorization Code + PKCE | public (без секрету), redirect `…/swagger/oauth2-redirect.html` сервісів; без `code_challenge` запит відхиляється |
+
+- **Aggregator** отримує токен Client Credentials (`Duende.AccessTokenManagement`, кеш до закінчення терміну) і додає його до **всіх** HTTP- і gRPC-викликів сервісів (`AddClientCredentialsTokenHandler`). Під час старту токен прогрівається (`Security/ServiceTokenWarmup.cs`).
+- **Swagger UI** кожного сервісу має кнопку *Authorize*: Bearer (будь-який IdP) або OAuth2 Authorization Code + PKCE через IdentityServer (`Platform.ServiceDefaults/Security/SwaggerSecurityExtensions.cs`).
+
+### 18.4 Частина 3 — Keycloak + Pulumi
+
+- **AppHost** (траєкторія Б): `AddKeycloak("keycloak", 8080, adminPassword).WithDataVolume()`, сервіси отримують `WithReference(keycloak)`. У сервісах `AddKeycloakJwtBearer(serviceName: "keycloak", realm: "AuctionHouse", …)` знаходить Keycloak через service discovery.
+- **`infra/keycloak`** (Pulumi, C#, `Pulumi.Keycloak`):
+  - realm `AuctionHouse` (RegistrationAllowed, ResetPasswordAllowed, RememberMe, VerifyEmail, теми);
+  - Resource Servers `auctions-api`, `catalog-api`, `payments-api`, `community-api`: confidential clients з Authorization Services, scopes, ресурс, role-політики, scope-permission на кожен scope (`PermissionMatrix.cs`);
+  - realm-ролі `admin` / `manager` / `user` / `guest`; client-роль `service-reader` на кожному Resource Server і composite realm-роль `service-reader` для service account Aggregator-а;
+  - clients через **фабрику** (`ClientFactory.cs`): `auctionhouse-postman` (Authorization Code, confidential), `auctionhouse-swagger` (public + PKCE S256), `auctionhouse-aggregator` (Client Credentials). Default scopes, audience mappers і claim `realm_roles` винесено в **extension methods** (`ClientExtensions.cs`);
+  - тестові користувачі на кожну роль: email підтверджено, пароль тимчасовий;
+  - outputs: `RealmUrl`, `AdminConsoleUrl`, `TokenEndpoint`, `ClientIds`, `ClientSecrets` (secret), `ResourceServerIds`, `TestUsers`.
+- **Як потрапляють дозволи в токен.** Клієнт отримує звичайний access token, потім обмінює його на **RPT** (`grant_type=urn:ietf:params:oauth:grant-type:uma-ticket`, `audience=auctions-api`). Keycloak обчислює role-політики і кладе в RPT `authorization.permissions[].scopes`. Рішення «пропустити чи 403» Keycloak **не** приймає: це робить мікросервіс локально.
+
+### 18.5 Permission-based авторизація в мікросервісах
+
+`Platform.ServiceDefaults/Security/`:
+- `PlatformAuthentication.cs` — policy scheme `Platform` за claim `iss` обирає `AuthService` / `IdentityServer` / `Keycloak`. Кожна схема валідує підпис, issuer, audience і термін **локально**, без звернення до IdP на кожен запит.
+- `PermissionAuthorization.cs` — `PermissionRequirement`, `PermissionAuthorizationHandler`, `[RequirePermission("…")]`, політика на кожен дозвіл. Дозволи з токена:
+  - `authorization.permissions[].scopes` — Keycloak RPT;
+  - `scope` — IdentityServer: це і є scope-based політики;
+  - `role` — Auth Service: User / Admin → дозволи за тією самою матрицею `RolePermissions`.
+- `[RequirePermission]` стоїть на **кожному** endpoint Auctions, Catalog, Community, Payments і на gRPC-сервісах (Aggregator читає їх з токеном Client Credentials). У сервісах `Program.cs` має явні `AddJwtBearer(...)` ×2 і `AddKeycloakJwtBearer(...)`, а також `AddPermissionAuthorization()`.
+- **Claims у бізнес-логіці:** `POST /api/items` без продавця бере його з `sub`; `GET /api/items/mine` повертає лоти поточного користувача, а токен сервісу без `sub` отримує 403.
+- **Gateway** (`Platform.ApiGateway`) валідує JWT **перед** проксіюванням: маршрути `/api/**` і `/users/**` мають `AuthorizationPolicy: default`, `/auth/**` — `anonymous`. Gateway пересилає `Authorization` далі і додає `X-User-Id` з `sub` через YARP transform. Вхідний `X-User-Id` клієнта видаляється, тож підробити його неможливо. Нові маршрути: `/auth/**`, `/users/**` → auth-api; `/api/payments/**` → payments-api.
+
+### 18.6 Перевірка матриці (фактичні коди, Keycloak RPT, через Gateway)
+
+Порожнє тіло й неіснуючий `id`: **400 / 404 означає, що авторизацію пройдено** (далі спрацювала валідація), **403** — дозволу немає.
+
+| Endpoint | Permission | admin | manager | user | guest |
+|---|---|---|---|---|---|
+| `GET /api/auctions` | `auctions:read` | 200 | 200 | 200 | 403 |
+| `POST /api/auctions` | `auctions:create` | 400 | 403 | 400 | 403 |
+| `PUT /api/auctions/{id}` | `auctions:update` | 400 | 400 | 403 | 403 |
+| `DELETE /api/auctions/{id}` | `auctions:delete` | 404 | **403** | 403 | 403 |
+| `POST /api/auctions/{id}/status` | `auctions:approve` | 400 | 400 | 403 | 403 |
+| `GET /api/items` | `catalog:read` | 200 | 200 | 200 | 200 |
+| `POST /api/items` | `catalog:create` | 400 | 403 | 403 | 403 |
+| `PUT /api/items/{id}` | `catalog:update` | 400 | 400 | 403 | 403 |
+| `DELETE /api/items/{id}` | `catalog:delete` | 404 | 403 | 403 | 403 |
+| `POST /api/items/{id}/status` | `catalog:publish` | 400 | 400 | 403 | 403 |
+| `GET /api/payments` | `payments:read` | 200 | 403 | 403 | 403 |
+| `POST /api/payments/process` | `payments:process` | 400 | 403 | 403 | 403 |
+| `POST /api/payments/refund` | `payments:refund` | 404 | 403 | 403 | 403 |
+
+Розбіжностей з таблицями 3.3.1–3.3.3 немає. Manager має доступ до `PUT` і отримує **403 (не 500)** на `DELETE`. User отримує 403 на будь-який endpoint payments-api.
+
+> Матрицю перевірено на realm з тією самою конфігурацією, що й `infra/keycloak`, створеною тестовим скриптом через Admin REST API (Pulumi CLI на стенді не було). Після перевірки realm видалено. Прогін `pulumi up` на вашій машині — у §18.1.
+
+Частини 1–2 перевірено так само, наскрізь через Gateway:
+- без токена → 401;
+- User → `POST /api/items` 403, `GET /users` 403;
+- Admin → `GET /users` 200;
+- ротація refresh і reuse detection → 401;
+- повторний токен verify/reset → 400;
+- lockout після 5 спроб;
+- Client Credentials → `GET /api/auctions` 200, `POST` 403, scope `auctions:delete` → `invalid_scope`;
+- Authorization Code + PKCE (swagger, postman) → токени; public client без PKCE відхилено.
+
+### 18.7 Декодовані JWT
+
+```jsonc
+// Auth Service (Частина 1): ролі в токені
+{ "sub": "4cb4c3c0-…", "unique_name": "tester…", "role": "User", "iss": "auctionhouse-auth", "aud": "auctionhouse-api", "exp-iat": "15 хв" }
+
+// IdentityServer, Client Credentials (Частина 2): немає sub — лише ідентичність сервісу
+{ "iss": "http://localhost:5700", "client_id": "aggregator_service",
+  "aud": ["auctions_api", "catalog_api", "community_api"], "scope": ["auctions:read", "catalog:read", "community:read"] }
+
+// Keycloak RPT, manager (Частина 3)
+{ "iss": "http://localhost:8080/realms/AuctionHouse", "aud": "auctions-api", "preferred_username": "max.manager",
+  "realm_access": { "roles": ["manager", …] },
+  "authorization": { "permissions": [ { "rsname": "auctions", "scopes": ["auctions:approve", "auctions:read", "auctions:update"] } ] } }
+```
+
+### 18.8 Postman
+
+`docs/postman/AuctionHouse-Lab09.postman_collection.json` — 53 запити:
+1. register → лист → verify → login → refresh / revoke / logout → forgot / reset / change password → `/users` від User і Admin;
+2. Client Credentials та Authorization Code + PKCE (вкладка *Authorization → Get New Access Token*);
+3. Keycloak: токен → RPT для кожного Resource Server → 13 запитів матриці (змінна `kcUser`).
+
+### 18.9 Відповідність критеріям прийому (Лаба 9)
+
+| № | Критерій | Де виконано |
+|---|---|---|
+| 1 | Auth Service на ASP.NET Identity з окремою базою через Aspire | `Platform.AppHost/AppHost.cs` (`identity-sql`, `IdentityDb`, `auth-api`), `Services/Auth/Auth.Api/Data/`, `Program.cs` (`AddIdentity` з паролем і lockout), `Migrations/` |
+| 2 | JWT: access 15 хв, refresh 7 днів з ротацією, refresh у HttpOnly cookie | `Auth.Api/Services/JwtTokenService.cs`, `RefreshTokenService.cs`, `Data/RefreshToken.cs`, `Controllers/AuthController.cs` |
+| 3 | register / login / refresh-token / revoke-token / logout | `Auth.Api/Controllers/AuthController.cs` |
+| 4 | Підтвердження email, відновлення і зміна пароля | `AuthController.cs` (`verify-email`, `resend-verification`, `forgot-password`, `reset-password`, `change-password`), `Services/EmailSender.cs` |
+| 5 | Ролі User / Admin і захищені `/users` | `Services/IdentitySeeder.cs`, `Controllers/UsersController.cs` (`[Authorize(Roles = "Admin")]`, owner-перевірка `sub`) |
+| 6 | Gateway маршрутизує `/auth`, `/users`; сервіси валідують JWT | `Platform.ApiGateway/appsettings.json`, `Program.cs` (JWT до проксі, `X-User-Id`); `Program.cs` сервісів (`AddJwtBearer`, `[RequirePermission]`), `Catalog.Api/Controllers/ItemsController.cs` (claims) |
+| 7 | IdentityServer з окремою базою, ASP.NET Identity, EF-сховищами | `Platform.IdentityServer/Program.cs`, `Data/Migrations/` (3 контексти), Quickstart UI `Pages/`, `AppHost.cs` (`IdentityServerDb`) |
+| 8 | ApiResources, ApiScopes, три clients | `Platform.IdentityServer/Config.cs` |
+| 9 | Токени IdentityServer + scope-based політики; Aggregator з Client Credentials | `Program.cs` сервісів (`ConfigureIdentityServerTokens`, Audience), `Platform.ServiceDefaults/Security/PermissionAuthorization.cs`, `Platform.Aggregator/Program.cs`, `Services/Payments/Payments.Api/` |
+| 10 | Keycloak через Aspire | `Platform.AppHost/AppHost.cs` (`AddKeycloak(...).WithDataVolume()`, `WithReference(keycloak)`), `Program.cs` сервісів (`AddKeycloakJwtBearer`) |
+| 11 | Pulumi: realm, resource servers зі scopes, ролі за матрицею | `infra/keycloak/AuctionHouseKeycloakStack.cs`, `PermissionMatrix.cs`, `Pulumi.yaml` |
+| 12 | Clients і тестові користувачі через Pulumi | `infra/keycloak/ClientFactory.cs`, `ClientExtensions.cs`, `AuctionHouseKeycloakStack.cs` (users, outputs) |
+| 13 | `[RequirePermission]` на кожному endpoint | `Platform.ServiceDefaults/Security/PermissionAuthorization.cs`; контролери Auctions, Catalog, Community, `Payments.Api/Controllers/PaymentsController.cs`; gRPC-сервіси |

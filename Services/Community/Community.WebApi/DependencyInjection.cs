@@ -2,12 +2,13 @@ using System.Reflection;
 using Community.WebApi.ExceptionHandling;
 using Community.WebApi.Mapping;
 using Microsoft.OpenApi.Models;
+using Platform.ServiceDefaults.Security;
 
 namespace Community.WebApi;
 
 public static class DependencyInjection
 {
-    public static IServiceCollection AddWebApi(this IServiceCollection services)
+    public static IServiceCollection AddWebApi(this IServiceCollection services, IConfiguration configuration)
     {
         // Валідацію виконує ValidationBehavior (FluentValidation), тому неявний [Required] для non-nullable рядків вимкнено.
         services.AddControllers(options => options.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
@@ -23,6 +24,8 @@ public static class DependencyInjection
 
             var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
             options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, xmlFile));
+            // Лаба 9: Bearer (будь-який IdP) і OAuth2 Authorization Code + PKCE через IdentityServer (client "swagger").
+            options.AddPlatformSecurity(configuration, Permissions.Community.All);
         });
 
         services.AddAutoMapper(cfg => cfg.AddMaps(typeof(RequestProfile).Assembly));

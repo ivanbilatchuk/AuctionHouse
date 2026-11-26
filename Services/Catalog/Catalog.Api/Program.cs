@@ -20,6 +20,7 @@ using Microsoft.OpenApi.Models;
 using Platform.EventBus;
 using Platform.ServiceDefaults;
 using Platform.ServiceDefaults.HealthChecks;
+using Platform.ServiceDefaults.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -85,6 +86,8 @@ builder.Services.AddSwaggerGen(options =>
 
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, xmlFile));
+    // Лаба 9: Bearer (будь-який IdP) і OAuth2 Authorization Code + PKCE через IdentityServer (client "swagger").
+    options.AddPlatformSecurity(builder.Configuration, Permissions.Catalog.All);
 });
 
 builder.Services.AddProblemDetails(options =>
@@ -106,6 +109,26 @@ builder.AddEventBus();
 builder.Services.AddScoped<ICatalogIntegrationEventService, CatalogIntegrationEventService>();
 builder.Services.AddHostedService<AuctionEventsConsumer>();
 
+// Лаба 9: аутентифікація JWT трьох Identity Provider-ів; кожен токен валідується ЛОКАЛЬНО (підпис, iss, aud, термін),
+// без звернення до IdP на кожен запит. Policy scheme "Platform" за claim iss обирає схему:
+//   AuthService    — Частина 1, власний Auth Service (ASP.NET Identity, HS256, ролі User / Admin);
+//   IdentityServer — Частина 2, Duende IdentityServer (Authority + Audience = ApiResource "catalog_api");
+//   Keycloak       — Частина 3, Keycloak через Aspire (realm AuctionHouse, Audience = Resource Server "catalog-api").
+builder.Services.AddAuthentication(PlatformAuthentication.Scheme)
+    .AddPlatformSchemeSelector(builder.Configuration)
+    .AddJwtBearer(PlatformAuthentication.AuthServiceScheme, options => options.ConfigureAuthServiceTokens(builder.Configuration))
+    .AddJwtBearer(PlatformAuthentication.IdentityServerScheme, options =>
+        options.ConfigureIdentityServerTokens(builder.Configuration, builder.Environment, audience: "catalog_api"))
+    .AddKeycloakJwtBearer(
+        serviceName: PlatformAuthentication.KeycloakServiceName,
+        realm: PlatformAuthentication.KeycloakRealm,
+        authenticationScheme: PlatformAuthentication.KeycloakScheme,
+        configureOptions: options => options.ConfigureKeycloakTokens(builder.Environment, audience: "catalog-api"));
+
+// Permission-based авторизація: політика на кожен дозвіл; [RequirePermission(...)] стоїть на КОЖНОМУ endpoint контролерів
+// і на gRPC-сервісі. Дозволи читаються з токена: authorization.permissions (Keycloak), scope (IdentityServer), role (Auth Service).
+builder.Services.AddPermissionAuthorization();
+
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
@@ -124,7 +147,10 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 
 app.UseSwagger();
-app.UseSwaggerUI();
+app.UseSwaggerUI(options => options.UsePlatformOAuth(Permissions.Catalog.All));
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 app.MapDefaultEndpoints();

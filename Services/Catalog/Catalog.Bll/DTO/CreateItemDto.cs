@@ -7,7 +7,8 @@ public sealed class CreateItemDto
     [Range(1, long.MaxValue)]
     public long CategoryId { get; init; }
 
-    public Guid SellerExternalId { get; init; }
+    // Лаба 9: якщо не задано — береться з claim "sub" токена користувача (ItemsController.Create).
+    public Guid SellerExternalId { get; set; }
 
     [Required, StringLength(50)]
     public string Sku { get; init; } = "";

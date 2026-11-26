@@ -1,0 +1,15 @@
+name: auctionhouse-keycloak
+runtime: dotnet
+description: >-
+  Лаба 9, Частина 3: Keycloak як Infrastructure as Code. Realm AuctionHouse, Resource Servers зі scopes
+  (auctions-api, catalog-api, payments-api, community-api), ролі admin / manager / user / guest з Permission Policies,
+  clients (Authorization Code, Client Credentials) і тестові користувачі.
+config:
+  keycloak:url:
+    value: http://localhost:8080
+  keycloak:realm:
+    value: master
+  keycloak:clientId:
+    value: admin-cli
+  keycloak:username:
+    value: admin

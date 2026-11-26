@@ -5,11 +5,14 @@ using Auctions.Domain.Exceptions;
 using Auctions.Grpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Platform.ServiceDefaults.Security;
 
 namespace Auctions.Api.Grpc;
 
 // Тонкий адаптер gRPC над IAuctionService/IBidService (кешуючі декоратори з Auctions.Bll/Caching).
 // Очікувані помилки -> InvalidArgument / NotFound, а не Internal.
+// Лаба 9: внутрішні gRPC-виклики Aggregator-а теж авторизуються — токен Client Credentials (IdentityServer) зі scope auctions:read.
+[RequirePermission(Permissions.Auctions.Read)]
 public sealed class AuctionsGrpcService(IAuctionService auctions, IBidService bids) : AuctionsService.AuctionsServiceBase
 {
     private const int MaxBids = 100;

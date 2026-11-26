@@ -1,0 +1,2060 @@
+{
+  "info": {
+    "_postman_id": "939bd45a-b1db-463f-be1f-13716615be2f",
+    "name": "AuctionHouse — Лаба 9 (Auth Service, IdentityServer, Keycloak)",
+    "description": "Запити для кожного flow: register/login/refresh (Auth Service), Authorization Code і Client Credentials (Duende IdentityServer), Keycloak RPT і матриця дозволів. Запускати послідовно в межах папки.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Auth Service (ASP.NET Identity + JWT)",
+      "item": [
+        {
+          "name": "Без токена -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/items",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register (роль User)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userName\": \"{{userName}}\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\",\n  \"displayName\": \"Postman Tester\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('userId', pm.response.json().userId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login до підтвердження email -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userNameOrEmail\": \"{{userName}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DEV: лист підтвердження (mock email, лише Development)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{authService}}/auth/dev/outbox?email={{userEmail}}",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const m = pm.response.json()[0].body.match(/\"token\": \"([^\"]+)\"/);",
+                  "pm.collectionVariables.set('emailToken', m[1]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/verify-email",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"token\": \"{{emailToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login -> access token + refresh у HttpOnly cookie",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userNameOrEmail\": \"{{userName}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);",
+                  "pm.test('refresh cookie', () => pm.expect(pm.cookies.has('refresh_token')).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User: GET /api/items -> 200",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/items",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User: GET /api/items/mine (claim sub)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/items/mine",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User: POST /api/items -> 403 (catalog:create)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/items",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User: GET /api/payments -> 403",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/payments",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "User: GET /users -> 403 (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/users",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Owner: GET /users/{id}",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/users/{{userId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Owner: PUT /users/{id}",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/users/{{userId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"displayName\": \"Updated\",\n  \"phoneNumber\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Owner: GET /users/{id}/refresh-tokens",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/users/{{userId}}/refresh-tokens",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /users/{id}/roles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/users/{{userId}}/roles",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh token (cookie, rotation)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gateway}}/auth/refresh-token",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revoke token (поточний cookie)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gateway}}/auth/revoke-token",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login знову",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userNameOrEmail\": \"{{userName}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/change-password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{userPassword}}\",\n  \"newPassword\": \"{{userNewPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/forgot-password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', () => pm.response.to.have.status(202));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DEV: лист скидання пароля",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{authService}}/auth/dev/outbox?email={{userEmail}}",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const m = pm.response.json()[0].body.match(/\"token\": \"([^\"]+)\"/);",
+                  "pm.collectionVariables.set('resetToken', m[1]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reset password (відкликає всі refresh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/reset-password",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (після скидання)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userNameOrEmail\": \"{{userName}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{gateway}}/auth/logout",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userNameOrEmail\": \"admin@auctionhouse.local\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('adminToken', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: GET /users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/users",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: POST /users/{id}/roles",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/users/{{userId}}/roles",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"Admin\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: DELETE /users/{id}/roles/{role}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{gateway}}/users/{{userId}}/roles/Admin",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: GET /api/payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/payments",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin: DELETE /users/{id}",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{gateway}}/users/{{userId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Duende IdentityServer (OAuth 2.0)",
+      "item": [
+        {
+          "name": "Client Credentials: aggregator_service (без sub)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{identityServer}}/connect/token",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "client_credentials"
+                },
+                {
+                  "key": "client_id",
+                  "value": "aggregator_service"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "aggregator_secret"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const t = pm.response.json().access_token; pm.collectionVariables.set('ccToken', t);",
+                  "const c = JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));",
+                  "pm.test('no sub', () => pm.expect(c.sub).to.be.undefined);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CC: GET /api/auctions -> 200 (auctions:read)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/auctions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ccToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CC: POST /api/auctions -> 403 (немає auctions:create)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/auctions",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ccToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Authorization Code + PKCE (Postman OAuth 2.0: Get New Access Token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/auctions",
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code_with_pkce",
+                  "type": "string"
+                },
+                {
+                  "key": "authUrl",
+                  "value": "{{identityServer}}/connect/authorize",
+                  "type": "string"
+                },
+                {
+                  "key": "accessTokenUrl",
+                  "value": "{{identityServer}}/connect/token",
+                  "type": "string"
+                },
+                {
+                  "key": "clientId",
+                  "value": "postman",
+                  "type": "string"
+                },
+                {
+                  "key": "clientSecret",
+                  "value": "postman_secret",
+                  "type": "string"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https://oauth.pstmn.io/v1/callback",
+                  "type": "string"
+                },
+                {
+                  "key": "useBrowser",
+                  "value": "true",
+                  "type": "string"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid profile offline_access auctions:read auctions:update catalog:read payments:read",
+                  "type": "string"
+                },
+                {
+                  "key": "challengeAlgorithm",
+                  "value": "S256",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenName",
+                  "value": "identityserver-postman",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Вкладка Authorization -> Get New Access Token: логін alice / Pass123$ (Admin) або bob / Pass123$ на сторінці Quickstart UI IdentityServer."
+          }
+        },
+        {
+          "name": "Aggregator: картка (сам іде до сервісів з токеном Client Credentials)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/aggregator/auctions/1/full?noCache=true",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Потрібен будь-який валідний токен користувача (Login з Частини 1)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Keycloak + permissions",
+      "item": [
+        {
+          "name": "Keycloak: access token користувача (Direct Grant, лише розробка)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/token",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password"
+                },
+                {
+                  "key": "client_id",
+                  "value": "auctionhouse-postman"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "{{keycloakPostmanSecret}}"
+                },
+                {
+                  "key": "username",
+                  "value": "{{kcUser}}"
+                },
+                {
+                  "key": "password",
+                  "value": "{{kcPassword}}"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "kcUser: anna.admin | max.manager | ulyana.user | gena.guest. Пароль тимчасовий (temporary) — спершу змініть його при вході через Authorization Code нижче."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('kcToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Keycloak: Authorization Code + PKCE (Postman OAuth 2.0)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/items",
+            "auth": {
+              "type": "oauth2",
+              "oauth2": [
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code_with_pkce",
+                  "type": "string"
+                },
+                {
+                  "key": "authUrl",
+                  "value": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/auth",
+                  "type": "string"
+                },
+                {
+                  "key": "accessTokenUrl",
+                  "value": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/token",
+                  "type": "string"
+                },
+                {
+                  "key": "clientId",
+                  "value": "auctionhouse-postman",
+                  "type": "string"
+                },
+                {
+                  "key": "clientSecret",
+                  "value": "{{keycloakPostmanSecret}}",
+                  "type": "string"
+                },
+                {
+                  "key": "redirect_uri",
+                  "value": "https://oauth.pstmn.io/v1/callback",
+                  "type": "string"
+                },
+                {
+                  "key": "useBrowser",
+                  "value": "true",
+                  "type": "string"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid",
+                  "type": "string"
+                },
+                {
+                  "key": "challengeAlgorithm",
+                  "value": "S256",
+                  "type": "string"
+                },
+                {
+                  "key": "tokenName",
+                  "value": "keycloak",
+                  "type": "string"
+                },
+                {
+                  "key": "addTokenTo",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Перший вхід вимагає змінити тимчасовий пароль. Токен збережіть у змінну kcToken."
+          }
+        },
+        {
+          "name": "RPT для auctions-api (authorization.permissions)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/token",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "urn:ietf:params:oauth:grant-type:uma-ticket"
+                },
+                {
+                  "key": "audience",
+                  "value": "auctions-api"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{kcToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "403 not_authorized = роль не має жодного дозволу на цей Resource Server (тоді у матриці використовується kcToken)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json().access_token; pm.collectionVariables.set('rptAuctions', t);",
+                  "console.log(JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).authorization);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "RPT для catalog-api (authorization.permissions)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/token",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "urn:ietf:params:oauth:grant-type:uma-ticket"
+                },
+                {
+                  "key": "audience",
+                  "value": "catalog-api"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{kcToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "403 not_authorized = роль не має жодного дозволу на цей Resource Server (тоді у матриці використовується kcToken)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json().access_token; pm.collectionVariables.set('rptCatalog', t);",
+                  "console.log(JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).authorization);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "RPT для payments-api (authorization.permissions)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{keycloak}}/realms/{{keycloakRealm}}/protocol/openid-connect/token",
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "urn:ietf:params:oauth:grant-type:uma-ticket"
+                },
+                {
+                  "key": "audience",
+                  "value": "payments-api"
+                }
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{kcToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "403 not_authorized = роль не має жодного дозволу на цей Resource Server (тоді у матриці використовується kcToken)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json().access_token; pm.collectionVariables.set('rptPayments', t);",
+                  "console.log(JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).authorization);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: GET /api/auctions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/auctions",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptAuctions}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/auctions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/auctions",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptAuctions}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: PUT /api/auctions/1",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/auctions/1",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptAuctions}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: DELETE /api/auctions/999999",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{gateway}}/api/auctions/999999",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptAuctions}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/auctions/1/status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/auctions/1/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptAuctions}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: GET /api/items",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/items",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptCatalog}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/items",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/items",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptCatalog}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: PUT /api/items/1",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/items/1",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptCatalog}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: DELETE /api/items/999999",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{gateway}}/api/items/999999",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptCatalog}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/items/1/status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/items/1/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptCatalog}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: GET /api/payments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gateway}}/api/payments",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptPayments}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/payments/process",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/payments/process",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptPayments}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Матриця: POST /api/payments/refund",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gateway}}/api/payments/refund",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{rptPayments}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "description": "Порожнє тіло / неіснуючий id: 400 або 404 означає, що авторизацію ПРОЙДЕНО; 403 — дозволу немає."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('not 401', () => pm.expect(pm.response.code).to.not.eql(401));",
+                  "console.log(pm.collectionVariables.get('kcUser'), pm.request.method, pm.request.url.toString(), pm.response.code);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "gateway",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "authService",
+      "value": "http://localhost:5680"
+    },
+    {
+      "key": "identityServer",
+      "value": "http://localhost:5700"
+    },
+    {
+      "key": "keycloak",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "keycloakRealm",
+      "value": "AuctionHouse"
+    },
+    {
+      "key": "userName",
+      "value": "postman.tester"
+    },
+    {
+      "key": "userEmail",
+      "value": "postman.tester@example.com"
+    },
+    {
+      "key": "userPassword",
+      "value": "Postman#2026a"
+    },
+    {
+      "key": "userNewPassword",
+      "value": "Postman#2026b"
+    },
+    {
+      "key": "adminPassword",
+      "value": "Admin#2026dev"
+    },
+    {
+      "key": "kcUser",
+      "value": "max.manager"
+    },
+    {
+      "key": "kcPassword",
+      "value": ""
+    },
+    {
+      "key": "keycloakPostmanSecret",
+      "value": ""
+    },
+    {
+      "key": "userId",
+      "value": ""
+    },
+    {
+      "key": "emailToken",
+      "value": ""
+    },
+    {
+      "key": "resetToken",
+      "value": ""
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "adminToken",
+      "value": ""
+    },
+    {
+      "key": "ccToken",
+      "value": ""
+    },
+    {
+      "key": "kcToken",
+      "value": ""
+    },
+    {
+      "key": "rptAuctions",
+      "value": ""
+    },
+    {
+      "key": "rptCatalog",
+      "value": ""
+    },
+    {
+      "key": "rptPayments",
+      "value": ""
+    }
+  ]
+}

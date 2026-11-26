@@ -2,6 +2,7 @@ using Catalog.Bll.DTO;
 using Catalog.Bll.Services;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Catalog.Api.Controllers;
 
@@ -12,12 +13,14 @@ namespace Catalog.Api.Controllers;
 public sealed class CategoriesController(ICategoryService service) : ControllerBase
 {
     /// <summary>Усі категорії.</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<CategoryDto>>> GetAll(CancellationToken ct)
         => Ok(await service.GetAllAsync(ct));
 
     /// <summary>Категорія за Id.</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet("{id:long}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -25,6 +28,7 @@ public sealed class CategoriesController(ICategoryService service) : ControllerB
         => Ok(await service.GetByIdAsync(id, ct));
 
     /// <summary>Категорія з її лотами (Explicit Loading: два SQL-запити).</summary>
+    [RequirePermission(Permissions.Catalog.Read)]
     [HttpGet("{id:long}/items")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -32,6 +36,7 @@ public sealed class CategoriesController(ICategoryService service) : ControllerB
         => Ok(await service.GetWithItemsAsync(id, ct));
 
     /// <summary>Створює категорію. Повторний slug дає 409.</summary>
+    [RequirePermission(Permissions.Catalog.Create)]
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -50,6 +55,7 @@ public sealed class CategoriesController(ICategoryService service) : ControllerB
     }
 
     /// <summary>М'яко видаляє категорію без підкатегорій і лотів.</summary>
+    [RequirePermission(Permissions.Catalog.Delete)]
     [HttpDelete("{id:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

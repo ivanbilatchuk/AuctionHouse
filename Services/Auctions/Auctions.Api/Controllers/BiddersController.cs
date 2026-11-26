@@ -2,6 +2,7 @@ using Auctions.Api.Metrics;
 using Auctions.Bll.DTO;
 using Auctions.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
+using Platform.ServiceDefaults.Security;
 
 namespace Auctions.Api.Controllers;
 
@@ -21,12 +22,14 @@ public class BiddersController : ControllerBase
     }
 
     /// <summary>Список учасників.</summary>
+    [RequirePermission(Permissions.Auctions.Read)]
     [HttpGet]
     [ProducesResponseType<IReadOnlyList<BidderDto>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<BidderDto>>> GetAll(CancellationToken cancellationToken) =>
         Ok(await _bidderService.GetAllAsync(cancellationToken));
 
     /// <summary>Учасник за ідентифікатором.</summary>
+    [RequirePermission(Permissions.Auctions.Read)]
     [HttpGet("{id:long}")]
     [ProducesResponseType<BidderDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -34,6 +37,7 @@ public class BiddersController : ControllerBase
         Ok(await _bidderService.GetByIdAsync(id, cancellationToken));
 
     /// <summary>Створює учасника торгів.</summary>
+    [RequirePermission(Permissions.Auctions.Create)]
     [HttpPost]
     [ProducesResponseType<BidderDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -45,6 +49,7 @@ public class BiddersController : ControllerBase
     }
 
     /// <summary>Реєструє учасника на аукціон і блокує депозит у його гаманці (одна транзакція).</summary>
+    [RequirePermission(Permissions.Auctions.Create)]
     [HttpPost("{id:long}/registrations")]
     [ProducesResponseType<RegistrationDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
